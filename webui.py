@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import queue
 import random
 import re
@@ -256,9 +257,11 @@ class GenerateRequest(BaseModel):
     cfg_scale: float | None = Field(default=None, ge=0, le=20)
 
 
-def build_app(engine: Engine):
+def build_app(engine: Engine, password: str | None = None):
     app = FastAPI(title="Music Gen Studio")
     OUTPUTS.mkdir(exist_ok=True)
+    if password:
+        install_password(app, password)
     app.mount("/outputs", StaticFiles(directory=OUTPUTS), name="outputs")
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
@@ -357,6 +360,10 @@ def main():
                         help="listen on all interfaces so people on your network can use the page; "
                              "Windows Firewall must allow TCP port 7860 (see README)")
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument("--password", default=os.environ.get("MUSICGEN_PASSWORD") or None,
+                        help="require this password (HTTP Basic auth, any username) for every page and download; "
+                             "also read from the MUSICGEN_PASSWORD environment variable. Use it whenever the app "
+                             "is reachable beyond your own machine")
     parser.add_argument("--model", default=str(MODELS / "YuE2-3B"))
     parser.add_argument("--vae", default=str(MODELS / "YuE2-Vae"))
     parser.add_argument("--vram", choices=VRAM_MODES, default="auto",
@@ -386,7 +393,36 @@ def main():
     print(file=sys.stderr)
     if args.open:
         threading.Thread(target=open_when_ready, args=(browse_host, args.port, url), daemon=True).start()
-    uvicorn.run(build_app(engine), host=args.host, port=args.port, log_level="warning")
+    if args.password:
+        print("  Password protection is on (HTTP Basic auth)\n", file=sys.stderr)
+    elif args.host == "0.0.0.0":
+        print("  No password set: anyone who can reach this address can use it (--password to require one)\n", file=sys.stderr)
+    uvicorn.run(build_app(engine, args.password), host=args.host, port=args.port, log_level="warning")
+
+
+def install_password(app, password: str):
+    """HTTP Basic auth on every route (the browser asks once and remembers it)."""
+    import base64
+    import secrets
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import Response as StarletteResponse
+
+    class PasswordMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            header = request.headers.get("authorization", "")
+            ok = False
+            if header.lower().startswith("basic "):
+                try:
+                    supplied = base64.b64decode(header[6:]).decode("utf-8").split(":", 1)[-1]
+                    ok = secrets.compare_digest(supplied.encode(), password.encode())
+                except (ValueError, UnicodeDecodeError):
+                    ok = False
+            if not ok:
+                return StarletteResponse("Music Gen Studio: password required", status_code=401,
+                                         headers={"WWW-Authenticate": 'Basic realm="Music Gen Studio", charset="UTF-8"'})
+            return await call_next(request)
+
+    app.add_middleware(PasswordMiddleware)
 
 
 def lan_addresses():

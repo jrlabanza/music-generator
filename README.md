@@ -64,6 +64,24 @@ Only one PC needs the GPU. Start the app with **`Start Music Gen Studio (share o
 - There is **no login**: anyone on the network can generate, cancel the running job, and download every song. Keep it to networks you trust and never port-forward it to the internet.
 - If a friend cannot connect although the rule exists, the network itself may isolate clients (common on guest/corporate Wi-Fi), or the PC's address changed — check the pill for the current one.
 
+### Use it from anywhere (phone, away from home)
+
+First, **set a password** — it is required for anything beyond your own machine:
+
+```powershell
+YuE\.venv\Scripts\python.exe webui.py --share --password "choose-something-long"
+```
+
+`--password` (or the `MUSICGEN_PASSWORD` environment variable) puts HTTP Basic auth on every page, API call and download; the browser asks once and remembers it. Then pick a route:
+
+| Route | What you get | Notes |
+|---|---|---|
+| **Tailscale** (recommended) | A private VPN between your devices. Install it on the PC and the phone, sign in with the same account, then open `http://<the PC's 100.x.x.x address>:7860` from the phone anywhere. `tailscale serve --bg 7860` adds HTTPS at a stable `https://<pc>.<tailnet>.ts.net` address. | Nothing is exposed to the public internet; works through corporate/CGNAT networks; free for personal use. Installing needs admin rights. |
+| **Cloudflare Tunnel** | A public HTTPS URL that forwards to the app: download `cloudflared.exe`, run `cloudflared tunnel --url http://127.0.0.1:7860`, and it prints an `https://….trycloudflare.com` address. | No account or router changes needed, but the URL is public and changes every run (a free Cloudflare account + your own domain gives a fixed one). Only ever run it **with `--password`**. |
+| Router port-forwarding + nginx/Caddy | The classic reverse proxy. | Exposes your home network, needs a static IP or dynamic DNS and a certificate; not worth it next to the two above. |
+
+Whatever the route: the PC stays on with the app running, generation still queues one at a time, and a phone on mobile data streams the FLAC fine (a 3-minute song is ~25 MB). If the PC is managed by an employer, check their policy before tunnelling it.
+
 ## Command line
 
 ```powershell
