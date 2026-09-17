@@ -1,6 +1,8 @@
-# YuE2 Studio — YuE2 song generation on an 8 GB GPU, with a web UI
+# Music Generator — YuE2 on an 8 GB GPU, with a web UI
 
-[YuE2](https://github.com/multimodal-art-projection/YuE) turns lyrics and a style prompt into an editable melody-and-chord score and then a full 48 kHz stereo song with vocals. Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows with an RTX 4060 (8 GB)**, unquantized, at roughly one minute of compute per minute of audio, and wraps it in a local web app.
+Built on [YuE2](https://github.com/multimodal-art-projection/YuE): *frontier music generation with symbolic planning, zero-shot covers, and agentic music editing.* Give it lyrics and a style prompt: it writes a melody-and-chord plan, then realizes that plan as a complete 48 kHz stereo song with vocals and accompaniment — and because the plan is an editable score, you can change the composition and render it again.
+
+Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows with an RTX 4060 (8 GB)**, unquantized, at roughly one minute of compute per minute of audio, and wraps it in a local web app (**YuE2 Studio**).
 
 ![YuE2 Studio](docs/screenshot.png)
 
@@ -17,8 +19,8 @@
 Requirements: an NVIDIA GPU with BF16 support and at least 8 GB VRAM (compute capability ≥ 8.0; FP8 mode needs ≥ 8.9), a recent driver, Python 3.10+ (`py -3.11` below), git, ~15 GB of disk, and enough RAM to hold the model between songs (16 GB works, 32 GB+ is comfortable).
 
 ```powershell
-git clone --recurse-submodules https://github.com/jrlabanza/yue2-studio.git
-cd yue2-studio
+git clone --recurse-submodules https://github.com/jrlabanza/music-generator.git
+cd music-generator
 py -3.11 -m venv YuE\.venv
 YuE\.venv\Scripts\python.exe -m pip install --upgrade pip
 YuE\.venv\Scripts\python.exe -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
