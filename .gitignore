@@ -1,0 +1,16 @@
+# weights (7.3 GB) -- fetch with download_models.py
+models/
+# generated songs
+outputs/
+# virtual environments
+.venv*/
+venv/
+# python
+__pycache__/
+*.py[cod]
+# local tooling
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

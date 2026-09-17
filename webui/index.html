@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YuE2 Studio</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">♪</span>
+    <div>
+      <div class="brand-name">YuE2 Studio</div>
+      <div class="brand-sub">lyrics + style → editable score → full song</div>
+    </div>
+  </div>
+  <div class="pills">
+    <span class="pill" id="pill-model" title="Model state"><span class="dot"></span><span class="pill-text">Connecting…</span></span>
+    <span class="pill" id="pill-gpu" title="GPU memory in use (all processes)"><span class="pill-text">GPU —</span></span>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ── Composer ──────────────────────────────────────────────────────── -->
+  <aside class="panel composer">
+    <div class="panel-head">
+      <h2>Compose</h2>
+      <button class="btn-link" id="btn-example" type="button">Load example</button>
+    </div>
+
+    <form id="form" autocomplete="off">
+      <label class="field">
+        <span class="label">Title <em>optional</em></span>
+        <input id="title" type="text" placeholder="City Lights" maxlength="80">
+      </label>
+
+      <label class="field">
+        <span class="label">Style</span>
+        <textarea id="style" rows="2" placeholder="English, warm piano pop, expressive female voice, acoustic piano, light drums, 88 BPM" required></textarea>
+        <span class="hint">Genre, instruments, vocal character, language, tempo.</span>
+      </label>
+
+      <label class="field">
+        <span class="label">Lyrics</span>
+        <textarea id="lyrics" rows="12" placeholder="[Verse]&#10;Neon fades along the lane&#10;…&#10;&#10;[Chorus]&#10;Let the day come into view&#10;…" required></textarea>
+        <span class="hint">Use section tags like <code>[Verse]</code>, <code>[Chorus]</code>, <code>[Bridge]</code>. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> generates.</span>
+      </label>
+
+      <div class="row">
+        <label class="field">
+          <span class="label">Plan</span>
+          <select id="cot">
+            <option value="full">Melody + chords (default)</option>
+            <option value="melody">Melody only, free accompaniment</option>
+            <option value="off">No symbolic plan</option>
+          </select>
+        </label>
+        <label class="field seed-field">
+          <span class="label">Seed</span>
+          <span class="seed-row">
+            <input id="seed" type="number" min="0" step="1" placeholder="random">
+            <button class="btn-icon" id="btn-dice" type="button" title="New random seed">🎲</button>
+          </span>
+        </label>
+      </div>
+
+      <details class="advanced" id="advanced">
+        <summary>Advanced · score &amp; guidance</summary>
+        <label class="field">
+          <span class="label">CFG scale <em>optional</em></span>
+          <input id="cfg" type="number" min="0" max="20" step="0.05" placeholder="model default">
+        </label>
+        <label class="field">
+          <span class="label">Score (ABC) <em>optional</em></span>
+          <textarea id="abc" rows="8" class="mono" placeholder="Paste or edit an ABC score here to render it instead of planning one. Needs plan mode “Melody + chords” or “Melody only”."></textarea>
+          <span class="hint">
+            Examples:
+            <button class="btn-link" type="button" data-score="melody">melody</button> ·
+            <button class="btn-link" type="button" data-score="score">score</button> ·
+            <button class="btn-link" type="button" data-score="score-jazz">score (jazz chords)</button> ·
+            <button class="btn-link" type="button" id="btn-clear-abc">clear</button>
+          </span>
+        </label>
+      </details>
+
+      <button class="btn-primary" id="btn-generate" type="submit">
+        <span class="btn-label">Generate song</span>
+      </button>
+      <p class="hint center" id="compose-hint">About one minute of compute per minute of audio on this GPU. Songs queue one at a time.</p>
+      <p class="error" id="form-error" hidden></p>
+    </form>
+  </aside>
+
+  <!-- ── Stage ─────────────────────────────────────────────────────────── -->
+  <section class="stage">
+    <div class="panel now" id="now" hidden>
+      <div class="panel-head">
+        <div>
+          <h2 id="now-title">Generating…</h2>
+          <div class="sub" id="now-sub"></div>
+        </div>
+        <button class="btn-ghost danger" id="btn-cancel" type="button">Cancel</button>
+      </div>
+      <ol class="stepper" id="stepper">
+        <li data-step="0"><span class="step-dot"></span><span>Prepare</span></li>
+        <li data-step="1"><span class="step-dot"></span><span>Plan score</span></li>
+        <li data-step="2"><span class="step-dot"></span><span>Semantic tokens</span></li>
+        <li data-step="3"><span class="step-dot"></span><span>Synthesize</span></li>
+        <li data-step="4"><span class="step-dot"></span><span>Decode audio</span></li>
+      </ol>
+      <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
+      <div class="stats" id="stats"></div>
+      <div class="queue" id="queue" hidden></div>
+    </div>
+
+    <div class="panel result" id="result" hidden>
+      <div class="panel-head">
+        <div>
+          <h2 id="result-title"></h2>
+          <div class="sub" id="result-meta"></div>
+        </div>
+        <span class="badge" id="result-badge"></span>
+      </div>
+      <p class="error" id="result-error" hidden></p>
+      <audio id="player" controls preload="metadata"></audio>
+      <div class="actions">
+        <a class="btn-ghost" id="dl-flac" download>Download FLAC</a>
+        <a class="btn-ghost" id="dl-wav" download>Download WAV</a>
+        <button class="btn-ghost" id="btn-load" type="button" title="Put this song's request back in the composer">Load into composer</button>
+        <button class="btn-ghost" id="btn-edit-score" type="button" title="Put this score in the composer to edit and re-render">Edit score</button>
+      </div>
+      <div class="style-line" id="result-style"></div>
+      <div class="score" id="score-block" hidden>
+        <div class="tabs">
+          <button class="tab active" data-tab="sheet" type="button">Sheet music</button>
+          <button class="tab" data-tab="abc" type="button">ABC text</button>
+        </div>
+        <div class="sheet" id="sheet"></div>
+        <pre class="abc mono" id="abc-text" hidden></pre>
+      </div>
+    </div>
+
+    <div class="panel library">
+      <div class="panel-head">
+        <h2>Library</h2>
+        <span class="sub" id="library-count"></span>
+      </div>
+      <ul class="songs" id="songs"></ul>
+      <p class="empty" id="library-empty">Nothing yet — your generated songs will appear here, and they stay in <code>outputs\</code> on disk.</p>
+    </div>
+  </section>
+</main>
+
+<script src="/static/vendor/abcjs-basic-min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

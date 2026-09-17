@@ -1,0 +1,4 @@
+# extras on top of `pip install -e YuE` (which pins torch, transformers, etc.)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+hf_xet
