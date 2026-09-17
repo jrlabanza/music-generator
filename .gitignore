@@ -18,3 +18,4 @@ Thumbs.db
 songs/private/
 # local secrets
 password.txt
+public_url.txt

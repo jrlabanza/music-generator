@@ -7,8 +7,12 @@ if not exist password.txt (
   pause
   exit /b 1
 )
-echo Starting Music Gen Studio with a Cloudflare tunnel. The public https address is printed below
-echo and shown as a QR code when you click the share pill on the page. Password: see password.txt
-echo Keep this window open while you are out; press Ctrl+C or close it to stop.
+echo Music Gen Studio with a Cloudflare tunnel. The public https address is printed below and saved to
+echo public_url.txt; the share pill on the page shows it as a QR code. Password: see password.txt
+echo If the app ever exits it restarts by itself. To stop: press Ctrl+C, answer Y, then close this window.
+:again
 "YuE\.venv\Scripts\python.exe" webui.py --share --tunnel --password-file password.txt --open
-pause
+echo.
+echo The app stopped (exit code %ERRORLEVEL%). Restarting in 15 seconds...
+timeout /t 15 /nobreak >nul
+goto again

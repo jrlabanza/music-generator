@@ -390,6 +390,9 @@ def main():
                         help="publish the app on the internet through a Cloudflare quick tunnel (needs cloudflared and a password); "
                              "the public https address is printed and shown in the share pill with a QR code")
     parser.add_argument("--cloudflared", type=Path, help="path to cloudflared.exe (default: PATH or the usual install folders)")
+    parser.add_argument("--keep-awake", dest="keep_awake", action="store_true", default=None,
+                        help="stop Windows from sleeping while the app runs (default: on with --share/--tunnel)")
+    parser.add_argument("--no-keep-awake", dest="keep_awake", action="store_false")
     parser.add_argument("--open", action="store_true", help="open the page in your browser once the server is up")
     args = parser.parse_args()
     for path in (args.model, args.vae):
@@ -409,6 +412,8 @@ def main():
             sys.exit("cloudflared.exe not found: install it from https://github.com/cloudflare/cloudflared/releases "
                      "or pass --cloudflared PATH")
         Tunnel(exe, args.port, engine)
+    if args.keep_awake or (args.keep_awake is None and (args.share or args.tunnel)):
+        print("  Keeping the PC awake while the app runs" if keep_awake() else "  (could not request keep-awake)", file=sys.stderr)
     engine.share_urls = [f"http://{ip}:{args.port}" for ip in lan_addresses()] if args.host == "0.0.0.0" else []
     browse_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     url = f"http://{browse_host}:{args.port}"
@@ -529,32 +534,66 @@ class Tunnel:
 
     URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
+    RESTART_DELAY = 10          # seconds; cloudflared reconnects by itself, this covers it exiting outright
+
     def __init__(self, exe, port, engine):
-        self.engine, self.url = engine, None
-        self.process = subprocess.Popen([str(exe), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+        self.exe, self.port, self.engine, self.url = exe, port, engine, None
+        self.process, self.closing = None, False
+        atexit.register(self.stop)
+        threading.Thread(target=self._supervise, name="cloudflared", daemon=True).start()
+
+    def _start(self):
+        print("  Starting Cloudflare tunnel ...", file=sys.stderr)
+        self.process = subprocess.Popen([str(self.exe), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{self.port}"],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                         encoding="utf-8", errors="replace")
-        atexit.register(self.stop)
-        threading.Thread(target=self._pump, name="cloudflared", daemon=True).start()
-        print("  Starting Cloudflare tunnel ...", file=sys.stderr)
+
+    def _supervise(self):
+        while not self.closing:
+            self._start()
+            self._pump()
+            if self.closing:
+                break
+            print(f"  [cloudflared] exited; restarting in {self.RESTART_DELAY}s (the public address will change)", file=sys.stderr)
+            time.sleep(self.RESTART_DELAY)
 
     def _pump(self):
+        announced = None
         for line in self.process.stdout:
             match = self.URL.search(line)
-            if match and self.url is None:
-                self.url = match.group(0)
+            if match and announced is None:
+                announced = self.url = match.group(0)
                 self.engine.share_urls = [self.url] + [u for u in getattr(self.engine, "share_urls", []) if u != self.url]
+                (HERE / "public_url.txt").write_text(self.url + "\n", encoding="utf-8")
                 print(f"\n  Public address (Cloudflare Tunnel) -> {self.url}\n"
                       "  Open the page and click the share pill for a QR code; the password applies there too.\n",
                       file=sys.stderr)
             elif " ERR " in line or "error" in line.lower():
                 print("  [cloudflared] " + line.strip()[:160], file=sys.stderr)
-        if self.url is None:
+        if announced is None:
             print("  [cloudflared] exited before giving a public address", file=sys.stderr)
 
     def stop(self):
-        if self.process.poll() is None:
+        self.closing = True
+        if self.process is not None and self.process.poll() is None:
             self.process.terminate()
+
+
+def keep_awake():
+    """Ask Windows not to sleep while the server runs (the display may still turn off)."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+
+    def hold():
+        while True:
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+            time.sleep(60)
+    ok = ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) != 0
+    if ok:
+        threading.Thread(target=hold, name="keep-awake", daemon=True).start()
+    return ok
 
 
 def lan_addresses():

@@ -82,6 +82,8 @@ YuE\.venv\Scripts\python.exe webui.py --share --password "choose-something-long"
 
 Whatever the route: the PC stays on with the app running, generation still queues one at a time, and a phone on mobile data streams the FLAC fine (a 3-minute song is ~25 MB). If the PC is managed by an employer, check their policy before tunnelling it.
 
+**Leaving it running for days.** With `--share`/`--tunnel` the app asks Windows not to sleep while it runs (`--no-keep-awake` to disable), restarts `cloudflared` by itself if it exits (the public address changes then; the current one is always in `public_url.txt` and the share pill), and the internet launcher restarts the app if it ever crashes. Two things it cannot control: **Windows Update restarts** (pause updates for the period, Settings → Windows Update) and **logging off or closing the console window** (both end it). After a reboot nobody is logged in, so nothing runs until you sign in and start the launcher again; a Task Scheduler entry that runs the launcher at logon covers the sign-in part.
+
 ## Command line
 
 ```powershell
