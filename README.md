@@ -12,6 +12,7 @@ Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **
 | `run_lowvram.py` | The 8 GB runner (also a CLI). Monkey-patches the upstream package at import time; the `YuE/` submodule is never modified |
 | `download_models.py` | Fetches the ~7.3 GB of weights into `models/` as plain files |
 | `Start Music Gen Studio.cmd` | Double-click launcher for the web app |
+| `songs/` | Example requests (`sahod.json`: a Tagalog OPM song about late salaries; `sahod-prog-metal.json`: the same lyrics as progressive metal) |
 | `YuE/` | Upstream repository, pinned as a git submodule |
 
 ## Setup (Windows)
@@ -53,6 +54,7 @@ Flags: `--host 0.0.0.0` to use it from a phone on the same network, `--quantizat
 ```powershell
 YuE\.venv\Scripts\python.exe run_lowvram.py --output outputs\first-song
 YuE\.venv\Scripts\python.exe run_lowvram.py --style "English, indie rock, male vocal, 120 BPM" --lyrics-file lyrics.txt --output outputs\rock
+YuE\.venv\Scripts\python.exe run_lowvram.py --request songs\sahod-prog-metal.json --output outputs\sahod-metal
 YuE\.venv\Scripts\python.exe run_lowvram.py --request my-song.json --cot melody --abc-file YuE\examples\melody.abc --output outputs\melody
 ```
 
@@ -64,14 +66,16 @@ The 3B model is 6.8 GB in BF16 and the upstream pipeline caps itself at total VR
 
 | Phase | On the GPU | In RAM |
 |---|---|---|
-| Plan score / semantic tokens | AR layers, embeddings, lm_head | NAR layers |
-| NAR prefill | AR layers, embeddings | NAR layers, lm_head |
-| NAR flow matching | NAR layers | AR layers, embeddings |
+| Plan score / semantic tokens | AR layers, lm_head | NAR layers, embedding table |
+| NAR prefill | AR layers | NAR layers, lm_head, embedding table |
+| NAR flow matching | NAR layers | AR layers, lm_head, embedding table |
 | VAE decode | VAE | transformer |
 
-Measured peak: **5.2 GiB** for a 90-second song, with CUDA-graph decoding at ~44 tokens/s on an RTX 4060.
+The 0.7 GiB token-embedding table never needs to be on the GPU: rows are gathered in RAM and copied over (a few KB per decode step; the CUDA-graph decoder reads them from a static buffer), which is numerically identical. Measured: **3.4 GiB** resident during decoding and a **5.1 GiB peak** for a 5½-minute song that uses almost the whole 9000-token budget, with CUDA-graph decoding at ~45 tokens/s on an RTX 4060.
 
-It also works around two gaps in the Windows PyTorch wheel: FlashAttention is not compiled in, so grouped-query SDPA silently falls back to the O(n²) math kernel (about 24 GB at song length) — K/V heads are expanded instead, which selects the fused memory-efficient kernel; and the CUDA-graph decoder is pointed at cuDNN attention rather than the missing flash entrypoint. Everything else (BF16 weights, sampling, the exact NAR prefill) is upstream behaviour.
+It also works around three quirks of the Windows PyTorch wheel and the upstream code: FlashAttention is not compiled in, so grouped-query SDPA silently falls back to the O(n²) math kernel (about 24 GB at song length) — K/V heads are expanded instead, which selects the fused memory-efficient kernel; the CUDA-graph decoder is pointed at cuDNN attention rather than the missing flash entrypoint; and the VAE's legacy `weight_norm` leaves 254 MiB of computed weights on the GPU after every decode, which is released explicitly. Everything else (BF16 weights, sampling, the exact NAR prefill) is upstream behaviour.
+
+**Reproducibility.** With the default cuDNN graph attention, the same seed does not reproduce the same song run-to-run on this setup (cuDNN appears to pick a different execution plan per graph capture). `--graph-attention sdpa` (web app and CLI) is deterministic but decodes about 2.7× slower.
 
 ## Licenses
 

@@ -85,18 +85,85 @@ def attention_expanded(q, k, v, *, causal=False, backend="sdpa", query_chunk_siz
 modeling.sdpa = sdpa_expanded
 nar.attention = attention_expanded
 
-# ── 2. CUDA-graph decoder: cuDNN instead of the uncompiled flash entrypoint ────
-_graph_init = cuda_graph.GraphAR.__init__
+# ── 2. Embedding table in system RAM ───────────────────────────────────────────
+class CPUEmbedding(torch.nn.Module):
+    """Drop-in for the 0.7 GiB ``embed_tokens`` table that keeps it in system RAM.
+
+    Rows are gathered on the CPU and copied to the GPU (a few KB per decode
+    step), so the numerics are identical. Inside a captured CUDA graph no CPU
+    work can run, so ``StaticGraphAR`` fills ``static`` before each replay.
+    """
+
+    def __init__(self, embedding, device):
+        super().__init__()
+        self.table = embedding.weight.detach().to("cpu")      # plain attribute: .to() never moves it
+        self.num_embeddings, self.embedding_dim = self.table.shape
+        self.static = None
+        # GraphAR reads embed_tokens.weight for its device/dtype probe.
+        self.weight = torch.empty(0, dtype=self.table.dtype, device=device)
+
+    def rows(self, ids):
+        return F.embedding(torch.as_tensor(ids, device="cpu"), self.table)
+
+    def forward(self, ids):
+        if self.static is not None:
+            return self.static
+        return self.rows(ids).to(ids.device)
+
+
+def release_weight_norm(module):
+    """Legacy weight_norm caches its computed ``weight`` as a plain tensor, which
+    ``.to("cpu")`` leaves behind on the GPU (254 MiB for the VAE)."""
+    if module is None:
+        return
+    for child in module.modules():
+        weight = child.__dict__.get("weight")
+        if isinstance(weight, torch.Tensor) and weight.device.type == "cuda":
+            child.weight = weight.to("cpu")
+
+
+# ── 3. CUDA-graph decoder: cuDNN attention, static embedding input ─────────────
 GRAPH_ATTENTION = "cudnn"
 
 
-def _graph_init_patched(self, *args, attention_backend="auto", **kwargs):
-    if attention_backend == "auto":
-        attention_backend = GRAPH_ATTENTION
-    _graph_init(self, *args, attention_backend=attention_backend, **kwargs)
+class StaticGraphAR(cuda_graph.GraphAR):
+    """GraphAR that uses cuDNN attention (the Windows wheel lacks the flash
+    entrypoint it would pick) and feeds a CPU-resident embedding table."""
+
+    def __init__(self, model, prefixes, max_tokens, *, attention_backend="auto", **kwargs):
+        if attention_backend == "auto":
+            attention_backend = GRAPH_ATTENTION
+        super().__init__(model, prefixes, max_tokens, attention_backend=attention_backend, **kwargs)
+        embed = model.model.embed_tokens
+        self.embed = embed if isinstance(embed, CPUEmbedding) else None
+        self.x0 = None
+        if self.embed is not None:
+            self.x0 = torch.zeros(self.branches, 1, self.embed.embedding_dim, device=self.device, dtype=self.dtype)
+
+    def prefill(self):
+        if self.embed is not None:
+            self.embed.static = None                 # prefix rows are gathered on the CPU
+        return super().prefill()
+
+    def _capture(self):
+        if self.embed is not None:
+            self.embed.static = self.x0              # the graph reads the static buffer
+        super()._capture()
+
+    def step(self, token):
+        if self.embed is not None:
+            index = int(token.item()) if isinstance(token, torch.Tensor) else int(token)
+            self.x0.copy_(self.embed.rows([index]).to(self.dtype)[None].expand(self.branches, 1, -1))
+        return super().step(token)
+
+    def close(self):
+        if self.embed is not None:
+            self.embed.static = None
+        self.x0 = None
+        super().close()
 
 
-cuda_graph.GraphAR.__init__ = _graph_init_patched
+cuda_graph.GraphAR = StaticGraphAR
 
 # ── 3. Pipeline with phase-wise placement ──────────────────────────────────────
 from yue2.pipeline import YuE2Pipeline, SemanticResult
@@ -117,7 +184,7 @@ class LowVRAMPipeline(YuE2Pipeline):
     # module groups -----------------------------------------------------------
     def _groups(self):
         m = self._model
-        ar, nar_modules = [m.model.embed_tokens], []
+        ar, nar_modules = [], []                   # embed_tokens lives in RAM (CPUEmbedding)
         for layer in m.model.layers:
             ar += [layer.input_layernorm, layer.self_attn, layer.post_attention_layernorm, layer.mlp]
             nar_modules += [layer.nar_input_layernorm, layer.nar_self_attn,
@@ -156,6 +223,8 @@ class LowVRAMPipeline(YuE2Pipeline):
                     torch_dtype=torch.bfloat16, low_cpu_mem_usage=True).eval()
                 self.load_timing["mot_load_seconds"] = time.perf_counter() - start
         model = self._model
+        if not isinstance(model.model.embed_tokens, CPUEmbedding):
+            model.model.embed_tokens = CPUEmbedding(model.model.embed_tokens, self.device)
         if for_nar:
             self._place(ar=True, nar=False, lm_head=False)
         else:
@@ -202,6 +271,14 @@ class LowVRAMPipeline(YuE2Pipeline):
                 self._report(f"chunk {index + 1}/{len(chunks)} solved")
         return torch.cat(output, dim=0).detach().float().cpu().numpy()
 
+    def decode(self, latents, *, full=False, vae=None):
+        try:
+            return super().decode(latents, full=full, vae=vae)
+        finally:
+            release_weight_norm(self._vae)           # upstream's .to("cpu") leaves 254 MiB behind
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
+
 
 # ── 4. CLI ─────────────────────────────────────────────────────────────────────
 def main():
@@ -232,6 +309,7 @@ def main():
         if not Path(path).is_dir():
             parser.error(f"Model directory not found: {path} -- run download_models.py first (about 7.3 GB).")
     request = json.loads(args.request.read_text(encoding="utf-8"))
+    request.pop("title", None)                    # web-app request files carry a display title
     if args.style:
         request["style"] = args.style
     if args.lyrics_file:
