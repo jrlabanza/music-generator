@@ -12,7 +12,7 @@ Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **
 | `run_lowvram.py` | The 8 GB runner (also a CLI). Monkey-patches the upstream package at import time; the `YuE/` submodule is never modified |
 | `download_models.py` | Fetches the ~7.3 GB of weights into `models/` as plain files |
 | `Start Music Gen Studio.cmd` | Double-click launcher for the web app |
-| `songs/` | Example requests (`sahod.json`: a Tagalog OPM song about late salaries; `sahod-prog-metal.json`: the same lyrics as progressive metal) |
+| `songs/` | Example requests: `sahod.json` (a Tagalog OPM song about late salaries), `sahod-prog-metal.json` (same lyrics as progressive metal), `sahod-prog-metal-duet.json` (the metal version re-sung as a male/female duet by supplying its chord-free score with `cot: melody` and singer names in the section tags) |
 | `YuE/` | Upstream repository, pinned as a git submodule |
 
 ## Setup (Windows)
