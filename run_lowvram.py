@@ -5,20 +5,27 @@ Upstream YuE2 assumes a 24 GB card and keeps the whole 6.8 GB BF16
 Mixture-of-Transformers model resident. This runner keeps only the half that
 is in use on the GPU and parks the rest in system RAM:
 
-    phase                GPU                              CPU
-    -------------------  -------------------------------  ------------------------
-    plan / semantic      AR layers, embeddings, lm_head   NAR layers
-    NAR prefill          AR layers, embeddings            NAR layers, lm_head
-    NAR flow-matching    NAR layers                       AR layers, embeddings
-    VAE decode           VAE                              transformer (upstream)
+    phase                GPU                     CPU
+    -------------------  ----------------------  ----------------------------------
+    plan / semantic      AR layers, lm_head      NAR layers, embedding table
+    NAR prefill          AR layers               NAR layers, lm_head, embedding table
+    NAR flow-matching    NAR layers              AR layers, lm_head, embedding table
+    VAE decode           VAE                     transformer (upstream)
 
-It also works around two gaps in the Windows PyTorch build:
+The 0.7 GiB token-embedding table stays in RAM: rows are gathered on the CPU
+and copied over, and the CUDA-graph decoder reads them from a static buffer.
+
+It also works around two gaps in the Windows PyTorch build and one upstream
+leak:
 
   * FlashAttention is not compiled in, so grouped-query SDPA silently falls
     back to the O(n^2) math kernel (about 24 GB at song length). K/V heads are
     expanded instead, which selects the memory-efficient kernel.
   * The CUDA-graph decoder would pick the missing flash entrypoint; it is
-    pointed at cuDNN attention instead.
+    pointed at cuDNN attention instead (not seed-reproducible run to run;
+    --graph-attention sdpa is, at ~2.7x slower decoding).
+  * The VAE's legacy weight_norm leaves 254 MiB of computed weights on the
+    GPU after .to("cpu"); they are released after each decode.
 
 Nothing in the upstream checkout is modified; everything is patched in here.
 
@@ -165,7 +172,7 @@ class StaticGraphAR(cuda_graph.GraphAR):
 
 cuda_graph.GraphAR = StaticGraphAR
 
-# ── 3. Pipeline with phase-wise placement ──────────────────────────────────────
+# ── 4. Pipeline with phase-wise placement ──────────────────────────────────────
 from yue2.pipeline import YuE2Pipeline, SemanticResult
 from yue2.protocol import token_prefixes
 from yue2.quantization import prepare_fp8_ar, restore_ar
