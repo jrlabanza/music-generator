@@ -11,7 +11,8 @@ Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **
 | `webui.py` + `webui/` | Local web app: compose, live stage progress, cancel/queue, in-page playback, score rendered as sheet music, edit-and-re-render, library of past songs |
 | `run_lowvram.py` | The runner (also a CLI) with both VRAM modes. Monkey-patches the upstream package at import time; the `YuE/` submodule is never modified |
 | `download_models.py` | Fetches the ~7.3 GB of weights into `models/` as plain files |
-| `Start Music Gen Studio.cmd` | Double-click launcher for the web app |
+| `Start Music Gen Studio.cmd` | Double-click launcher for the web app (this PC only) |
+| `Start Music Gen Studio (share on network).cmd` | Same, but reachable by everyone on your LAN — see *Share on your network* |
 | `songs/` | Example requests: `sahod.json` (a Tagalog OPM song about late salaries), `sahod-prog-metal.json` (same lyrics as progressive metal), `sahod-prog-metal-duet.json` (the metal version re-sung as a male/female duet by supplying its chord-free score with `cot: melody` and singer names in the section tags), `sahod-orchestra-choir.json` (rewritten as a Coldplay-style orchestral anthem with choir), `dark-trap-instrumental-*.json` (instrumentals: lyrics made only of `[... - instrumental]` section tags plus "instrumental, no vocals" leading the style; the planned score comes out with an all-rest vocal voice) |
 | `YuE/` | Upstream repository, pinned as a git submodule |
 
@@ -47,7 +48,20 @@ The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model 
 - **Result** — plays in the page; FLAC/WAV downloads; the generated score as sheet music (abcjs, bundled) or ABC text; *Load into composer* to remix; *Edit score* to change harmony or melody and re-render — the white-box editing flow from the upstream docs.
 - **Library** — every song in `outputs/`, newest first. Each folder keeps `audio.flac`, `score.abc`, `plan.json`, `semantic.npy`, `latent.npy`, `request.json`, `result.json`.
 
-Flags: `--vram low|normal|auto` (see below), `--host 0.0.0.0` to use it from a phone on the same network, `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
+Flags: `--vram low|normal|auto` (see below), `--share` to let other devices on your network use it (below), `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
+
+### Share on your network
+
+Only one PC needs the GPU. Start the app with **`Start Music Gen Studio (share on network).cmd`** (or `webui.py --share`) and it listens on every interface; the console and the header pill show the address to hand out, e.g. `http://192.168.1.20:7860`. Friends on the same Wi-Fi/LAN open that in any browser — phones included — and their songs queue one at a time on your GPU, with everyone seeing the shared Library.
+
+- **Windows Firewall** must allow inbound TCP on port 7860 for the Python that runs the server (the venv's `python.exe` hands off to your base Python install). The first time it listens, Windows usually shows an *allow access* prompt — tick both *Private* and *Public* if your network shows as Public. Or add the rule once from an **administrator** PowerShell:
+
+  ```powershell
+  New-NetFirewallRule -DisplayName "Music Gen Studio" -Direction Inbound -Protocol TCP -LocalPort 7860 -Action Allow -Profile Any
+  ```
+
+- There is **no login**: anyone on the network can generate, cancel the running job, and download every song. Keep it to networks you trust and never port-forward it to the internet.
+- If a friend cannot connect although the rule exists, the network itself may isolate clients (common on guest/corporate Wi-Fi), or the PC's address changed — check the pill for the current one.
 
 ## Command line
 

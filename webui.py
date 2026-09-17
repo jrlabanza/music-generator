@@ -198,7 +198,8 @@ class Engine:
         return {"model": {"state": self.model_state, "error": self.model_error,
                           "stage": self.pipe.stage_snapshot() if self.pipe and self.model_state == "loading" else None,
                           "quantization": self.args.quantization, "vram_mode": self.vram_mode},
-                "gpu": gpu, "current": current, "queue": queued}
+                "gpu": gpu, "current": current, "queue": queued,
+                "share_urls": getattr(self, "share_urls", [])}
 
 
 # ── Output library ────────────────────────────────────────────────────────────
@@ -349,7 +350,10 @@ def build_app(engine: Engine):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to reach it from other devices on your network")
+    parser.add_argument("--host", default="127.0.0.1", help="interface to listen on (see --share)")
+    parser.add_argument("--share", action="store_true",
+                        help="listen on all interfaces so people on your network can use the page; "
+                             "Windows Firewall must allow TCP port 7860 (see README)")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--model", default=str(MODELS / "YuE2-3B"))
     parser.add_argument("--vae", default=str(MODELS / "YuE2-Vae"))
@@ -366,14 +370,46 @@ def main():
         if not Path(path).is_dir():
             sys.exit(f"Model directory not found: {path} -- run download_models.py first (about 7.3 GB).")
     import uvicorn
+    if args.share:
+        args.host = "0.0.0.0"
     engine = Engine(args)
+    engine.share_urls = [f"http://{ip}:{args.port}" for ip in lan_addresses()] if args.host == "0.0.0.0" else []
     browse_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     url = f"http://{browse_host}:{args.port}"
     print(f"\n  Music Gen Studio -> {url}\n  GPU {gpu_total_gib():.1f} GiB -> {engine.vram_mode} VRAM mode"
-          f"{' (forced)' if args.vram != 'auto' else ''}\n", file=sys.stderr)
+          f"{' (forced)' if args.vram != 'auto' else ''}", file=sys.stderr)
+    if engine.share_urls:
+        print("  Share on your network -> " + "  or  ".join(engine.share_urls)
+              + f"\n  (others need Windows Firewall to allow TCP port {args.port}; see README)", file=sys.stderr)
+    print(file=sys.stderr)
     if args.open:
         threading.Thread(target=open_when_ready, args=(browse_host, args.port, url), daemon=True).start()
     uvicorn.run(build_app(engine), host=args.host, port=args.port, log_level="warning")
+
+
+def lan_addresses():
+    """IPv4 addresses of this machine's real interfaces, the default-route one first."""
+    import socket
+    found = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith(("127.", "169.254.")) and ip not in found:
+                found.append(ip)
+    except OSError:
+        pass
+    try:                                     # no packet is sent; this only resolves the outbound route
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("8.8.8.8", 80))
+        primary = probe.getsockname()[0]
+        probe.close()
+        if primary in found:
+            found.remove(primary)
+        if not primary.startswith(("127.", "169.254.")):
+            found.insert(0, primary)
+    except OSError:
+        pass
+    return found
 
 
 def open_when_ready(host, port, url, timeout=60):

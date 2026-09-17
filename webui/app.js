@@ -5,7 +5,7 @@
   const el = {
     form: $("form"), title: $("title"), style: $("style"), lyrics: $("lyrics"), cot: $("cot"), seed: $("seed"),
     cfg: $("cfg"), abc: $("abc"), advanced: $("advanced"), generate: $("btn-generate"), formError: $("form-error"),
-    composeHint: $("compose-hint"), pillModel: $("pill-model"), pillGpu: $("pill-gpu"),
+    composeHint: $("compose-hint"), pillModel: $("pill-model"), pillGpu: $("pill-gpu"), pillShare: $("pill-share"),
     now: $("now"), nowTitle: $("now-title"), nowSub: $("now-sub"), stepper: $("stepper"), progress: $("progress"),
     bar: $("bar"), stats: $("stats"), queue: $("queue"), cancel: $("btn-cancel"),
     result: $("result"), resultTitle: $("result-title"), resultMeta: $("result-meta"), resultBadge: $("result-badge"),
@@ -103,6 +103,15 @@
     }
   });
 
+  el.pillShare.addEventListener("click", async () => {
+    const url = el.pillShare.dataset.url;
+    if (!url) return;
+    try { await navigator.clipboard.writeText(url); el.pillShare.querySelector(".pill-text").textContent = "copied " + url; }
+    catch { prompt("Address for people on your network:", url); return; }
+    el.pillShare.dataset.flash = "1";
+    setTimeout(() => { delete el.pillShare.dataset.flash; poll(); }, 2000);
+  });
+
   // ── status polling ────────────────────────────────────────────────────
   async function poll() {
     clearTimeout(state.timer);
@@ -128,6 +137,9 @@
     else if (status.current) setPill(el.pillModel, "busy", "Generating");
     else setPill(el.pillModel, "ok", ["Model ready", m.vram_mode === "low" ? "low-VRAM mode" : null, m.quantization === "fp8" ? "FP8" : null].filter(Boolean).join(" · "));
     if (status.gpu) setPill(el.pillGpu, "", `GPU ${status.gpu.used_gib.toFixed(1)} / ${status.gpu.total_gib.toFixed(1)} GB`);
+    const share = status.share_urls || [];
+    el.pillShare.hidden = !share.length;
+    if (share.length && !el.pillShare.dataset.flash) { el.pillShare.querySelector(".pill-text").textContent = "share: " + share[0].replace(/^https?:[/][/]/, ""); el.pillShare.dataset.url = share[0]; }
     el.composeHint.textContent = m.state === "loading"
       ? "The model is still loading into memory; songs you submit now start as soon as it is ready."
       : m.state === "error" ? `Model failed to load: ${m.error}`
