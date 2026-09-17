@@ -53,6 +53,29 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE / "YuE"
 MODELS = HERE / "models"
 
+# ── 0. Text encoding on Windows ────────────────────────────────────────────────
+# Upstream writes its JSON artifacts with the platform default encoding (cp1252
+# on Windows), which raises UnicodeEncodeError for any character outside it —
+# e.g. a "⸻" pasted into the lyrics — after the song has already been generated.
+import os
+import yue2.storage as storage
+import yue2.pipeline as pipeline_module
+
+
+def write_json_utf8(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+storage.write_json = write_json_utf8
+pipeline_module.write_json = write_json_utf8          # pipeline.py imported its own reference
+for _stream in (sys.stdout, sys.stderr):                # never crash on printing exotic characters
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 # ── 1. Attention without grouped-query SDPA ────────────────────────────────────
 import yue2.modeling_yue2 as modeling
 import yue2.nar as nar

@@ -141,8 +141,10 @@ class Engine:
         out = OUTPUTS / job.id
         try:
             song = self.pipe(**job.request, cancelled=lambda: job.cancel_requested)
-            song.save_artifacts(out)
+            out.mkdir(parents=True, exist_ok=True)
+            song.save(out / "audio.flac")           # audio first: a metadata problem must never lose the take
             (out / "title.txt").write_text(job.title, encoding="utf-8")
+            song.save_artifacts(out)
             job.state = "done"
         except InterruptedError:
             job.state = "cancelled"
