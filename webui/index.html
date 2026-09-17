@@ -154,6 +154,17 @@
   </section>
 </main>
 
+<div class="overlay" id="share-overlay" hidden>
+  <div class="dialog">
+    <div class="panel-head"><h2>Open on your phone</h2><button class="btn-ghost" id="share-close" type="button">Close</button></div>
+    <img class="qr" id="share-qr" alt="QR code of the address">
+    <div class="share-url mono" id="share-url"></div>
+    <div class="actions"><button class="btn-ghost" id="share-copy" type="button">Copy address</button></div>
+    <p class="hint" id="share-note">Scan with the phone camera. If a password is set, the phone asks for it once (any username).</p>
+    <ul class="share-list" id="share-list"></ul>
+  </div>
+</div>
+
 <script src="/static/vendor/abcjs-basic-min.js"></script>
 <script src="/static/app.js"></script>
 </body>

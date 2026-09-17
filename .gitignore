@@ -16,3 +16,5 @@ __pycache__/
 Thumbs.db
 # personal song requests (never committed)
 songs/private/
+# local secrets
+password.txt

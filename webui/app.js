@@ -103,13 +103,27 @@
     }
   });
 
-  el.pillShare.addEventListener("click", async () => {
-    const url = el.pillShare.dataset.url;
-    if (!url) return;
-    try { await navigator.clipboard.writeText(url); el.pillShare.querySelector(".pill-text").textContent = "copied " + url; }
-    catch { prompt("Address for people on your network:", url); return; }
-    el.pillShare.dataset.flash = "1";
-    setTimeout(() => { delete el.pillShare.dataset.flash; poll(); }, 2000);
+  el.pillShare.addEventListener("click", () => {
+    const urls = state.status ? (state.status.share_urls || []) : [];
+    if (!urls.length) return;
+    const main = urls[0];
+    $("share-qr").src = `/api/qr.svg?text=${encodeURIComponent(main)}`;
+    $("share-url").textContent = main;
+    $("share-list").innerHTML = "";
+    for (const url of urls) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span>${/trycloudflare|ts\.net/.test(url) ? "internet" : "this network"}</span><code></code>`;
+      li.querySelector("code").textContent = url;
+      $("share-list").appendChild(li);
+    }
+    $("share-overlay").hidden = false;
+  });
+  $("share-close").addEventListener("click", () => { $("share-overlay").hidden = true; });
+  $("share-overlay").addEventListener("click", (e) => { if (e.target.id === "share-overlay") $("share-overlay").hidden = true; });
+  $("share-copy").addEventListener("click", async () => {
+    const url = $("share-url").textContent;
+    try { await navigator.clipboard.writeText(url); $("share-copy").textContent = "Copied"; setTimeout(() => ($("share-copy").textContent = "Copy address"), 1500); }
+    catch { prompt("Address:", url); }
   });
 
   // ── status polling ────────────────────────────────────────────────────
@@ -118,13 +132,16 @@
     let status = null;
     try {
       status = await api("/api/status");
+      state.status = status;
       if (!state.online) { state.online = true; loadLibrary(); }
       renderPills(status);
       renderNow(status);
       await resolveWatched(status);
-    } catch {
+    } catch (error) {
       state.online = false;
-      setPill(el.pillModel, "err", "Server offline");
+      const locked = /^401/.test(error.message);
+      setPill(el.pillModel, "err", locked ? "Password required - reload the page" : "Server offline");
+      if (locked) el.composeHint.textContent = "This app is password-protected. Reload the page and enter the password (any username).";
     }
     const active = status && (status.current || status.queue.length || status.model.state === "loading");
     state.timer = setTimeout(poll, active ? 1000 : 4000);

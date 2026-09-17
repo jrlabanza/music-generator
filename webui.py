@@ -11,12 +11,15 @@ page lists that folder as a library, so nothing is lost when the server stops.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import mimetypes
 import os
 import queue
 import random
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -337,6 +340,15 @@ def build_app(engine: Engine, password: str | None = None):
         return {**summary, "request": request, "timing": result.get("timing"),
                 "score": score, "audio_url": f"/outputs/{song_id}/audio.flac"}
 
+    @app.get("/api/qr.svg")
+    def qr(text: str):
+        if len(text) > 512 or not re.match(r"https?://", text):
+            raise HTTPException(422, "text must be an http(s) URL")
+        import qrcode
+        import qrcode.image.svg
+        image = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=12, border=2)
+        return Response(image.to_string(), media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
+
     @app.get("/api/songs/{song_id}/audio.wav")
     def wav(song_id: str):
         import io
@@ -373,15 +385,30 @@ def main():
     parser.add_argument("--gpu-reserve-gib", type=float, default=2.0)
     parser.add_argument("--graph-attention", choices=("cudnn", "sdpa"), default="cudnn",
                         help="cudnn is fast; sdpa is seed-reproducible but ~2.7x slower")
+    parser.add_argument("--password-file", type=Path, help="read the password from this file (first line)")
+    parser.add_argument("--tunnel", action="store_true",
+                        help="publish the app on the internet through a Cloudflare quick tunnel (needs cloudflared and a password); "
+                             "the public https address is printed and shown in the share pill with a QR code")
+    parser.add_argument("--cloudflared", type=Path, help="path to cloudflared.exe (default: PATH or the usual install folders)")
     parser.add_argument("--open", action="store_true", help="open the page in your browser once the server is up")
     args = parser.parse_args()
     for path in (args.model, args.vae):
         if not Path(path).is_dir():
             sys.exit(f"Model directory not found: {path} -- run download_models.py first (about 7.3 GB).")
     import uvicorn
+    if args.password_file:
+        args.password = args.password_file.read_text(encoding="utf-8").splitlines()[0].strip() or None
+    if args.tunnel and not args.password:
+        sys.exit("--tunnel publishes the app on the internet: set --password (or --password-file / MUSICGEN_PASSWORD) first.")
     if args.share:
         args.host = "0.0.0.0"
     engine = Engine(args)
+    if args.tunnel:
+        exe = find_cloudflared(args.cloudflared)
+        if exe is None:
+            sys.exit("cloudflared.exe not found: install it from https://github.com/cloudflare/cloudflared/releases "
+                     "or pass --cloudflared PATH")
+        Tunnel(exe, args.port, engine)
     engine.share_urls = [f"http://{ip}:{args.port}" for ip in lan_addresses()] if args.host == "0.0.0.0" else []
     browse_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     url = f"http://{browse_host}:{args.port}"
@@ -423,6 +450,52 @@ def install_password(app, password: str):
             return await call_next(request)
 
     app.add_middleware(PasswordMiddleware)
+
+
+CLOUDFLARED_CANDIDATES = [Path(r"C:\Program Files (x86)\cloudflared\cloudflared.exe"),
+                          Path(r"C:\Program Files\cloudflared\cloudflared.exe"), HERE / "tools" / "cloudflared.exe"]
+
+
+def find_cloudflared(explicit=None):
+    if explicit:
+        return explicit if Path(explicit).is_file() else None
+    found = shutil.which("cloudflared")
+    if found:
+        return Path(found)
+    return next((c for c in CLOUDFLARED_CANDIDATES if c.is_file()), None)
+
+
+class Tunnel:
+    """Cloudflare quick tunnel to the local server; the public URL goes to the share pill."""
+
+    URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+    def __init__(self, exe, port, engine):
+        self.engine, self.url = engine, None
+        self.process = subprocess.Popen([str(exe), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        encoding="utf-8", errors="replace")
+        atexit.register(self.stop)
+        threading.Thread(target=self._pump, name="cloudflared", daemon=True).start()
+        print("  Starting Cloudflare tunnel ...", file=sys.stderr)
+
+    def _pump(self):
+        for line in self.process.stdout:
+            match = self.URL.search(line)
+            if match and self.url is None:
+                self.url = match.group(0)
+                self.engine.share_urls = [self.url] + [u for u in getattr(self.engine, "share_urls", []) if u != self.url]
+                print(f"\n  Public address (Cloudflare Tunnel) -> {self.url}\n"
+                      "  Open the page and click the share pill for a QR code; the password applies there too.\n",
+                      file=sys.stderr)
+            elif " ERR " in line or "error" in line.lower():
+                print("  [cloudflared] " + line.strip()[:160], file=sys.stderr)
+        if self.url is None:
+            print("  [cloudflared] exited before giving a public address", file=sys.stderr)
+
+    def stop(self):
+        if self.process.poll() is None:
+            self.process.terminate()
 
 
 def lan_addresses():
