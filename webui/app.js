@@ -140,8 +140,8 @@
     } catch (error) {
       state.online = false;
       const locked = /^401/.test(error.message);
-      setPill(el.pillModel, "err", locked ? "Password required - reload the page" : "Server offline");
-      if (locked) el.composeHint.textContent = "This app is password-protected. Reload the page and enter the password (any username).";
+      setPill(el.pillModel, "err", locked ? "Signed out" : "Server offline");
+      if (locked) { location.href = "/login"; return; }
     }
     const active = status && (status.current || status.queue.length || status.model.state === "loading");
     state.timer = setTimeout(poll, active ? 1000 : 4000);

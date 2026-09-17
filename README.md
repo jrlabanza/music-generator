@@ -72,7 +72,7 @@ First, **set a password** — it is required for anything beyond your own machin
 YuE\.venv\Scripts\python.exe webui.py --share --password "choose-something-long"
 ```
 
-`--password` (or the `MUSICGEN_PASSWORD` environment variable) puts HTTP Basic auth on every page, API call and download; the browser asks once and remembers it. Then pick a route:
+`--password` (or `--password-file password.txt`, or the `MUSICGEN_PASSWORD` environment variable) protects every page, API call and download: browsers get a sign-in page (`/login`, cookie kept for 30 days, `/logout` to end it), and scripts can use HTTP Basic auth instead. Then pick a route:
 
 | Route | What you get | Notes |
 |---|---|---|

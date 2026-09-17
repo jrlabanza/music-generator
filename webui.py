@@ -427,27 +427,86 @@ def main():
     uvicorn.run(build_app(engine, args.password), host=args.host, port=args.port, log_level="warning")
 
 
+LOGIN_PAGE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music Gen Studio</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;color:#e9ebf1;background:#0d0f13}
+  form{width:min(360px,92vw);background:#171b22;border:1px solid #272d38;border-radius:14px;padding:26px 24px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+  h1{font-size:18px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#f4b543,#ff8a5b);color:#1b1300;font-weight:700;font-size:20px}
+  p{color:#8f97a8;margin:0 0 18px;font-size:13px}
+  input{width:100%;box-sizing:border-box;font:inherit;color:#e9ebf1;background:#12151b;border:1px solid #353d4b;border-radius:8px;padding:11px 12px;margin-bottom:12px;outline:none}
+  input:focus{border-color:#f4b543;box-shadow:0 0 0 3px rgba(244,181,67,.18)}
+  button{width:100%;padding:12px;border:0;border-radius:10px;font:inherit;font-weight:700;color:#1b1300;background:linear-gradient(180deg,#ffd27a,#f4b543);cursor:pointer}
+  .err{color:#f07178;background:rgba(240,113,120,.08);border:1px solid rgba(240,113,120,.35);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:12px}
+</style></head><body>
+<form method="post" action="/login" autocomplete="on">
+  <h1><span class="mark">&#9834;</span>Music Gen Studio</h1>
+  <p>Enter the password to use the studio.</p>
+  {error}
+  <input type="password" name="password" placeholder="Password" autofocus required>
+  <button type="submit">Sign in</button>
+</form></body></html>"""
+
+
 def install_password(app, password: str):
-    """HTTP Basic auth on every route (the browser asks once and remembers it)."""
+    """Password login: a cookie session set by /login (works in every browser, including in-app
+    ones that never show HTTP auth prompts), with HTTP Basic auth accepted as well for scripts."""
+    import asyncio
     import base64
+    import hashlib
+    import hmac
     import secrets
+    from fastapi import Form
     from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.responses import Response as StarletteResponse
+    from starlette.responses import RedirectResponse, Response as StarletteResponse
+
+    secret = hashlib.sha256(("music-gen-studio:" + password).encode("utf-8")).digest()
+    session = hmac.new(secret, b"session", hashlib.sha256).hexdigest()   # stable until the password changes
+    cookie = "mgs_session"
+
+    def password_ok(supplied):
+        return secrets.compare_digest(supplied.encode("utf-8"), password.encode("utf-8"))
+
+    def authorized(request):
+        if secrets.compare_digest(request.cookies.get(cookie, ""), session):
+            return True
+        header = request.headers.get("authorization", "")
+        if header.lower().startswith("basic "):
+            try:
+                return password_ok(base64.b64decode(header[6:]).decode("utf-8").split(":", 1)[-1])
+            except (ValueError, UnicodeDecodeError):
+                return False
+        return False
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_form():
+        return LOGIN_PAGE.replace("{error}", "")
+
+    @app.post("/login")
+    async def login(password_field: str = Form(alias="password")):
+        if not password_ok(password_field):
+            await asyncio.sleep(0.8)                       # slow down guessing
+            return HTMLResponse(LOGIN_PAGE.replace("{error}", '<div class="err">Wrong password.</div>'), status_code=401)
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(cookie, session, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax", path="/")
+        return response
+
+    @app.get("/logout")
+    def logout():
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(cookie, path="/")
+        return response
 
     class PasswordMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
-            header = request.headers.get("authorization", "")
-            ok = False
-            if header.lower().startswith("basic "):
-                try:
-                    supplied = base64.b64decode(header[6:]).decode("utf-8").split(":", 1)[-1]
-                    ok = secrets.compare_digest(supplied.encode(), password.encode())
-                except (ValueError, UnicodeDecodeError):
-                    ok = False
-            if not ok:
-                return StarletteResponse("Music Gen Studio: password required", status_code=401,
-                                         headers={"WWW-Authenticate": 'Basic realm="Music Gen Studio", charset="UTF-8"'})
-            return await call_next(request)
+            if request.url.path == "/login" or authorized(request):
+                return await call_next(request)
+            wants_page = request.method == "GET" and "text/html" in request.headers.get("accept", "")
+            if wants_page:
+                return RedirectResponse("/login", status_code=303)
+            return StarletteResponse("Music Gen Studio: password required (sign in at /login)", status_code=401,
+                                     headers={"WWW-Authenticate": 'Basic realm="Music Gen Studio", charset="UTF-8"'})
 
     app.add_middleware(PasswordMiddleware)
 
