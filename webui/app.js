@@ -1,4 +1,4 @@
-/* YuE2 Studio front end: talks to webui.py, polls job progress, shows the library. */
+/* Music Gen Studio front end: talks to webui.py, polls job progress, shows the library. */
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);

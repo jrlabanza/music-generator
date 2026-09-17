@@ -252,7 +252,7 @@ class GenerateRequest(BaseModel):
 
 
 def build_app(engine: Engine):
-    app = FastAPI(title="YuE2 Studio")
+    app = FastAPI(title="Music Gen Studio")
     OUTPUTS.mkdir(exist_ok=True)
     app.mount("/outputs", StaticFiles(directory=OUTPUTS), name="outputs")
     app.mount("/static", StaticFiles(directory=WEB), name="static")
@@ -362,7 +362,7 @@ def main():
     run_lowvram.GRAPH_ATTENTION = args.graph_attention
     import uvicorn
     engine = Engine(args)
-    print(f"\n  YuE2 Studio -> http://{args.host}:{args.port}\n", file=sys.stderr)
+    print(f"\n  Music Gen Studio -> http://{args.host}:{args.port}\n", file=sys.stderr)
     uvicorn.run(build_app(engine), host=args.host, port=args.port, log_level="warning")
 
 

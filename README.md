@@ -2,16 +2,16 @@
 
 Built on [YuE2](https://github.com/multimodal-art-projection/YuE): *frontier music generation with symbolic planning, zero-shot covers, and agentic music editing.* Give it lyrics and a style prompt: it writes a melody-and-chord plan, then realizes that plan as a complete 48 kHz stereo song with vocals and accompaniment — and because the plan is an editable score, you can change the composition and render it again.
 
-Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows with an RTX 4060 (8 GB)**, unquantized, at roughly one minute of compute per minute of audio, and wraps it in a local web app (**YuE2 Studio**).
+Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows with an RTX 4060 (8 GB)**, unquantized, at roughly one minute of compute per minute of audio, and wraps it in a local web app (**Music Gen Studio**).
 
-![YuE2 Studio](docs/screenshot.png)
+![Music Gen Studio](docs/screenshot.png)
 
 | File | What |
 |---|---|
 | `webui.py` + `webui/` | Local web app: compose, live stage progress, cancel/queue, in-page playback, score rendered as sheet music, edit-and-re-render, library of past songs |
 | `run_lowvram.py` | The 8 GB runner (also a CLI). Monkey-patches the upstream package at import time; the `YuE/` submodule is never modified |
 | `download_models.py` | Fetches the ~7.3 GB of weights into `models/` as plain files |
-| `Start YuE2 Studio.cmd` | Double-click launcher for the web app |
+| `Start Music Gen Studio.cmd` | Double-click launcher for the web app |
 | `YuE/` | Upstream repository, pinned as a git submodule |
 
 ## Setup (Windows)
@@ -33,7 +33,7 @@ The venv lives inside `YuE\` because that is where the launcher and scripts look
 
 ## Use the web app
 
-Double-click **`Start YuE2 Studio.cmd`**, or:
+Double-click **`Start Music Gen Studio.cmd`**, or:
 
 ```powershell
 YuE\.venv\Scripts\python.exe webui.py --open
