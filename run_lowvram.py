@@ -1,9 +1,13 @@
 #!/usr/bin/env python
-"""Run YuE2 on an 8 GB GPU under Windows.
+"""Run YuE2 on Windows on an 8 GB or a 16 GB+ GPU.
 
-Upstream YuE2 assumes a 24 GB card and keeps the whole 6.8 GB BF16
-Mixture-of-Transformers model resident. This runner keeps only the half that
-is in use on the GPU and parks the rest in system RAM:
+Two VRAM modes, chosen automatically from the card (``--vram auto``):
+
+  * ``normal`` (16 GB+): upstream placement, the whole 6.8 GB BF16 model stays
+    on the GPU.
+  * ``low`` (8 GB): upstream assumes a 24 GB card, so this mode keeps only the
+    half of the Mixture-of-Transformers model that is in use on the GPU and
+    parks the rest in system RAM:
 
     phase                GPU                     CPU
     -------------------  ----------------------  ----------------------------------
@@ -31,6 +35,7 @@ Nothing in the upstream checkout is modified; everything is patched in here.
 
     python run_lowvram.py --output outputs/first-song
     python run_lowvram.py --request YuE/examples/song.json --cot melody --output outputs/melody
+    python run_lowvram.py --vram normal --output outputs/big-card      # force whole-model placement
     python run_lowvram.py --quantization fp8 --output outputs/fp8      # smallest footprint, slower
 """
 from __future__ import annotations
@@ -172,14 +177,19 @@ class StaticGraphAR(cuda_graph.GraphAR):
 
 cuda_graph.GraphAR = StaticGraphAR
 
-# ── 4. Pipeline with phase-wise placement ──────────────────────────────────────
+# ── 4. Pipelines: normal (whole model on the GPU) and low-VRAM placement ──────
 from yue2.pipeline import YuE2Pipeline, SemanticResult
 from yue2.protocol import token_prefixes
 from yue2.quantization import prepare_fp8_ar, restore_ar
 from yue2.nar import CachedNAR, song_chunks
 
 
-class LowVRAMPipeline(YuE2Pipeline):
+class StandardPipeline(YuE2Pipeline):
+    """Upstream placement (the whole model resident on the GPU) plus the fixes
+    above. Suitable for cards with 16 GB or more."""
+
+    vram_mode = "normal"
+
     def __init__(self, *args, gpu_reserve_gib=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.gpu_reserve_gib = gpu_reserve_gib
@@ -187,6 +197,20 @@ class LowVRAMPipeline(YuE2Pipeline):
             total = torch.cuda.get_device_properties(self.device).total_memory
             fraction = (total - gpu_reserve_gib * 2**30) / total
             torch.cuda.set_per_process_memory_fraction(min(max(fraction, 0.1), 1.0), self.device)
+
+    def decode(self, latents, *, full=False, vae=None):
+        try:
+            return super().decode(latents, full=full, vae=vae)
+        finally:
+            release_weight_norm(self._vae)           # upstream's .to("cpu") leaves 254 MiB behind
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
+
+
+class LowVRAMPipeline(StandardPipeline):
+    """Keeps only the half of the model that is in use on the GPU (8 GB cards)."""
+
+    vram_mode = "low"
 
     # module groups -----------------------------------------------------------
     def _groups(self):
@@ -278,16 +302,46 @@ class LowVRAMPipeline(YuE2Pipeline):
                 self._report(f"chunk {index + 1}/{len(chunks)} solved")
         return torch.cat(output, dim=0).detach().float().cpu().numpy()
 
-    def decode(self, latents, *, full=False, vae=None):
-        try:
-            return super().decode(latents, full=full, vae=vae)
-        finally:
-            release_weight_norm(self._vae)           # upstream's .to("cpu") leaves 254 MiB behind
-            if self.device.type == "cuda":
-                torch.cuda.empty_cache()
+
+# ── 5. Mode selection ──────────────────────────────────────────────────────────
+VRAM_MODES = ("auto", "low", "normal")
+NORMAL_MODE_MIN_GIB = 14          # whole-model placement peaks around 10 GiB on a long song
 
 
-# ── 4. CLI ─────────────────────────────────────────────────────────────────────
+def gpu_total_gib(device=0):
+    return torch.cuda.get_device_properties(device).total_memory / 2**30 if torch.cuda.is_available() else 0.0
+
+
+def resolve_vram_mode(mode="auto"):
+    if mode not in VRAM_MODES:
+        raise ValueError(f"vram must be one of {VRAM_MODES}")
+    if mode != "auto":
+        return mode
+    return "normal" if gpu_total_gib() >= NORMAL_MODE_MIN_GIB else "low"
+
+
+def pipeline_class(mode="auto"):
+    return LowVRAMPipeline if resolve_vram_mode(mode) == "low" else StandardPipeline
+
+
+def make_pipeline(model, vae, *, vram="auto", quantization="none", gpu_reserve_gib=2.0,
+                  graph_attention="cudnn", bases=(), **kwargs):
+    """Build the pipeline for this GPU: ``low`` swaps model halves (8 GB cards),
+    ``normal`` keeps the whole model resident (16 GB+), ``auto`` picks by VRAM.
+    ``bases`` are extra mixins placed in front of the pipeline class."""
+    global GRAPH_ATTENTION
+    GRAPH_ATTENTION = graph_attention
+    mode = resolve_vram_mode(vram)
+    cls = pipeline_class(mode)
+    if bases:
+        cls = type(cls.__name__, (*bases, cls), {})
+    budget = 8 if mode == "low" else max(8.0, float(round(gpu_total_gib())))
+    return cls.from_pretrained(model, vae=vae, device="cuda", memory_budget_gib=budget,
+                               backend="torch-eager" if quantization == "fp8" else "torch",
+                               quantization=quantization, gpu_reserve_gib=gpu_reserve_gib, **kwargs)
+
+
+# ── 6. CLI ─────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--request", type=Path, default=REPO / "examples" / "song.json",
@@ -301,11 +355,13 @@ def main():
     parser.add_argument("--cfg-scale", type=float)
     parser.add_argument("--model", default=str(MODELS / "YuE2-3B"))
     parser.add_argument("--vae", default=str(MODELS / "YuE2-Vae"))
+    parser.add_argument("--vram", choices=VRAM_MODES, default="auto",
+                        help="low: swap model halves through system RAM (8 GB cards); "
+                             "normal: whole model on the GPU (16 GB+); auto: pick by detected VRAM")
     parser.add_argument("--quantization", choices=("none", "fp8"), default="none",
                         help="fp8 shrinks the AR weights further but forces the slower eager decoder")
-    parser.add_argument("--backend", choices=("torch", "torch-eager"),
-                        help="default: torch (CUDA graphs) unless --quantization fp8")
-    parser.add_argument("--graph-attention", choices=("cudnn", "sdpa"), default="cudnn")
+    parser.add_argument("--graph-attention", choices=("cudnn", "sdpa"), default="cudnn",
+                        help="cudnn is fast; sdpa is seed-reproducible but ~2.7x slower")
     parser.add_argument("--gpu-reserve-gib", type=float, default=2.0,
                         help="VRAM left for the driver/desktop; lower it if you close other GPU apps")
     args = parser.parse_args()
@@ -332,14 +388,10 @@ def main():
     if request.get("abc") is not None and request.get("cot", "full") == "off":
         parser.error("A supplied score requires full or melody mode.")
 
-    global GRAPH_ATTENTION
-    GRAPH_ATTENTION = args.graph_attention
-    backend = args.backend or ("torch-eager" if args.quantization == "fp8" else "torch")
-
-    with LowVRAMPipeline.from_pretrained(
-        args.model, vae=args.vae, device="cuda", memory_budget_gib=8,
-        backend=backend, quantization=args.quantization, gpu_reserve_gib=args.gpu_reserve_gib,
-    ) as pipe:
+    mode = resolve_vram_mode(args.vram)
+    print(f"[lowvram] GPU {gpu_total_gib():.1f} GiB -> {mode} VRAM mode", file=sys.stderr)
+    with make_pipeline(args.model, vae=args.vae, vram=mode, quantization=args.quantization,
+                       gpu_reserve_gib=args.gpu_reserve_gib, graph_attention=args.graph_attention) as pipe:
         song = pipe(**request)
         song.save_artifacts(args.output)
         print(json.dumps({"audio": str(args.output / "audio.flac"),

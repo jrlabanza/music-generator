@@ -31,8 +31,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-import run_lowvram
-from run_lowvram import HERE, MODELS, REPO, LowVRAMPipeline
+from run_lowvram import HERE, MODELS, REPO, VRAM_MODES, gpu_total_gib, make_pipeline, resolve_vram_mode
 
 WEB = HERE / "webui"
 OUTPUTS = HERE / "outputs"
@@ -42,7 +41,9 @@ mimetypes.add_type("audio/flac", ".flac")
 
 
 # ── Pipeline with observable stages ───────────────────────────────────────────
-class WebPipeline(LowVRAMPipeline):
+class StageObserver:
+    """Mixin placed in front of either pipeline class by make_pipeline(bases=...)."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.current_stage = None
@@ -105,7 +106,8 @@ class Engine:
 
     def __init__(self, args):
         self.args = args
-        self.pipe: WebPipeline | None = None
+        self.pipe = None
+        self.vram_mode = resolve_vram_mode(args.vram)
         self.model_state, self.model_error = "loading", None
         self.queue: "queue.Queue[Job]" = queue.Queue()
         self.jobs: dict[str, Job] = {}
@@ -116,10 +118,10 @@ class Engine:
 
     def _run(self):
         try:
-            self.pipe = WebPipeline.from_pretrained(
-                self.args.model, vae=self.args.vae, device="cuda", memory_budget_gib=8,
-                backend="torch-eager" if self.args.quantization == "fp8" else "torch",
-                quantization=self.args.quantization, gpu_reserve_gib=self.args.gpu_reserve_gib)
+            self.pipe = make_pipeline(
+                self.args.model, vae=self.args.vae, vram=self.vram_mode, quantization=self.args.quantization,
+                gpu_reserve_gib=self.args.gpu_reserve_gib, graph_attention=self.args.graph_attention,
+                bases=(StageObserver,))
             self.pipe.preload()
             self.model_state = "ready"
         except Exception as exc:                       # surface to the page instead of dying silently
@@ -195,7 +197,7 @@ class Engine:
         queued = [j.public() for j in self.jobs.values() if j.state == "queued"]
         return {"model": {"state": self.model_state, "error": self.model_error,
                           "stage": self.pipe.stage_snapshot() if self.pipe and self.model_state == "loading" else None,
-                          "quantization": self.args.quantization},
+                          "quantization": self.args.quantization, "vram_mode": self.vram_mode},
                 "gpu": gpu, "current": current, "queue": queued}
 
 
@@ -351,19 +353,41 @@ def main():
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--model", default=str(MODELS / "YuE2-3B"))
     parser.add_argument("--vae", default=str(MODELS / "YuE2-Vae"))
+    parser.add_argument("--vram", choices=VRAM_MODES, default="auto",
+                        help="low: swap model halves through system RAM (8 GB cards); "
+                             "normal: whole model on the GPU (16 GB+); auto: pick by detected VRAM")
     parser.add_argument("--quantization", choices=("none", "fp8"), default="none")
     parser.add_argument("--gpu-reserve-gib", type=float, default=2.0)
-    parser.add_argument("--graph-attention", choices=("cudnn", "sdpa"), default="cudnn")
+    parser.add_argument("--graph-attention", choices=("cudnn", "sdpa"), default="cudnn",
+                        help="cudnn is fast; sdpa is seed-reproducible but ~2.7x slower")
     parser.add_argument("--open", action="store_true", help="open the page in your browser once the server is up")
     args = parser.parse_args()
     for path in (args.model, args.vae):
         if not Path(path).is_dir():
             sys.exit(f"Model directory not found: {path} -- run download_models.py first (about 7.3 GB).")
-    run_lowvram.GRAPH_ATTENTION = args.graph_attention
     import uvicorn
     engine = Engine(args)
-    print(f"\n  Music Gen Studio -> http://{args.host}:{args.port}\n", file=sys.stderr)
+    browse_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+    url = f"http://{browse_host}:{args.port}"
+    print(f"\n  Music Gen Studio -> {url}\n  GPU {gpu_total_gib():.1f} GiB -> {engine.vram_mode} VRAM mode"
+          f"{' (forced)' if args.vram != 'auto' else ''}\n", file=sys.stderr)
+    if args.open:
+        threading.Thread(target=open_when_ready, args=(browse_host, args.port, url), daemon=True).start()
     uvicorn.run(build_app(engine), host=args.host, port=args.port, log_level="warning")
+
+
+def open_when_ready(host, port, url, timeout=60):
+    """Open the page in the default browser once the server accepts connections."""
+    import socket
+    import webbrowser
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.3)
+    webbrowser.open(url)
 
 
 if __name__ == "__main__":

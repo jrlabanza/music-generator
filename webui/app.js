@@ -126,7 +126,7 @@
     if (m.state === "loading") setPill(el.pillModel, "busy", m.stage ? m.stage.label + "…" : "Loading model…");
     else if (m.state === "error") setPill(el.pillModel, "err", "Model failed to load");
     else if (status.current) setPill(el.pillModel, "busy", "Generating");
-    else setPill(el.pillModel, "ok", m.quantization === "fp8" ? "Model ready · FP8" : "Model ready");
+    else setPill(el.pillModel, "ok", ["Model ready", m.vram_mode === "low" ? "low-VRAM mode" : null, m.quantization === "fp8" ? "FP8" : null].filter(Boolean).join(" · "));
     if (status.gpu) setPill(el.pillGpu, "", `GPU ${status.gpu.used_gib.toFixed(1)} / ${status.gpu.total_gib.toFixed(1)} GB`);
     el.composeHint.textContent = m.state === "loading"
       ? "The model is still loading into memory; songs you submit now start as soon as it is ready."

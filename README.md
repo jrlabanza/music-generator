@@ -1,15 +1,15 @@
-# Music Generator — YuE2 on an 8 GB GPU, with a web UI
+# Music Generator — YuE2 on 8 GB or 16 GB GPUs, with a web UI
 
 Built on [YuE2](https://github.com/multimodal-art-projection/YuE): *frontier music generation with symbolic planning, zero-shot covers, and agentic music editing.* Give it lyrics and a style prompt: it writes a melody-and-chord plan, then realizes that plan as a complete 48 kHz stereo song with vocals and accompaniment — and because the plan is an editable score, you can change the composition and render it again.
 
-Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows with an RTX 4060 (8 GB)**, unquantized, at roughly one minute of compute per minute of audio, and wraps it in a local web app (**Music Gen Studio**).
+Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows**, unquantized, on an **8 GB card** (RTX 4060, *low-VRAM mode*: model halves are swapped through system RAM) or a **16 GB+ card** (*normal mode*: the whole model stays on the GPU), at roughly one minute of compute per minute of audio, and wraps it in a local web app (**Music Gen Studio**). The mode is picked automatically from the detected VRAM.
 
 ![Music Gen Studio](docs/screenshot.png)
 
 | File | What |
 |---|---|
 | `webui.py` + `webui/` | Local web app: compose, live stage progress, cancel/queue, in-page playback, score rendered as sheet music, edit-and-re-render, library of past songs |
-| `run_lowvram.py` | The 8 GB runner (also a CLI). Monkey-patches the upstream package at import time; the `YuE/` submodule is never modified |
+| `run_lowvram.py` | The runner (also a CLI) with both VRAM modes. Monkey-patches the upstream package at import time; the `YuE/` submodule is never modified |
 | `download_models.py` | Fetches the ~7.3 GB of weights into `models/` as plain files |
 | `Start Music Gen Studio.cmd` | Double-click launcher for the web app |
 | `songs/` | Example requests: `sahod.json` (a Tagalog OPM song about late salaries), `sahod-prog-metal.json` (same lyrics as progressive metal), `sahod-prog-metal-duet.json` (the metal version re-sung as a male/female duet by supplying its chord-free score with `cot: melody` and singer names in the section tags) |
@@ -17,7 +17,7 @@ Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **
 
 ## Setup (Windows)
 
-Requirements: an NVIDIA GPU with BF16 support and at least 8 GB VRAM (compute capability ≥ 8.0; FP8 mode needs ≥ 8.9), a recent driver, Python 3.10+ (`py -3.11` below), git, ~15 GB of disk, and enough RAM to hold the model between songs (16 GB works, 32 GB+ is comfortable).
+Requirements: an NVIDIA GPU with BF16 support and at least 8 GB VRAM (compute capability ≥ 8.0; FP8 mode needs ≥ 8.9), a recent driver, Python 3.10+ (`py -3.11` below), git, ~15 GB of disk, and enough RAM to hold the model between songs (16 GB works, 32 GB+ is comfortable in low-VRAM mode, which keeps most of the model in RAM).
 
 ```powershell
 git clone --recurse-submodules https://github.com/jrlabanza/music-generator.git
@@ -47,7 +47,7 @@ The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model 
 - **Result** — plays in the page; FLAC/WAV downloads; the generated score as sheet music (abcjs, bundled) or ABC text; *Load into composer* to remix; *Edit score* to change harmony or melody and re-render — the white-box editing flow from the upstream docs.
 - **Library** — every song in `outputs/`, newest first. Each folder keeps `audio.flac`, `score.abc`, `plan.json`, `semantic.npy`, `latent.npy`, `request.json`, `result.json`.
 
-Flags: `--host 0.0.0.0` to use it from a phone on the same network, `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
+Flags: `--vram low|normal|auto` (see below), `--host 0.0.0.0` to use it from a phone on the same network, `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
 
 ## Command line
 
@@ -58,9 +58,19 @@ YuE\.venv\Scripts\python.exe run_lowvram.py --request songs\sahod-prog-metal.jso
 YuE\.venv\Scripts\python.exe run_lowvram.py --request my-song.json --cot melody --abc-file YuE\examples\melody.abc --output outputs\melody
 ```
 
-`--cot full|melody|off`, `--abc-file` (needs `full` or `melody`), `--seed`, `--cfg-scale`, `--quantization fp8`. Output directories must be fresh. See `YuE/docs/` for the upstream generation, editing and cover guides.
+`--cot full|melody|off`, `--abc-file` (needs `full` or `melody`), `--seed`, `--cfg-scale`, `--vram low|normal|auto`, `--quantization fp8`. Output directories must be fresh. See `YuE/docs/` for the upstream generation, editing and cover guides.
 
-## How the 8 GB fit works
+## VRAM modes
+
+| Mode | Picked when | What happens |
+|---|---|---|
+| `normal` | ≥ 14 GB VRAM detected (e.g. a 16 GB card) | Upstream placement: the whole 6.8 GB model stays on the GPU. Fastest. |
+| `low` | < 14 GB (e.g. 8 GB) | Only the model half in use is on the GPU; the rest and the embedding table live in RAM (details below). A few seconds of weight movement per song. |
+| `auto` (default) | — | Chooses between the two from the detected card, so the same launcher works on both machines. |
+
+Force a mode with `--vram low` / `--vram normal` on `webui.py` or `run_lowvram.py`; the console banner and the page's status pill show which one is active. The Windows attention fixes apply in both modes.
+
+## How the 8 GB fit works (low-VRAM mode)
 
 The 3B model is 6.8 GB in BF16 and the upstream pipeline caps itself at total VRAM minus 2 GB, so on an 8 GB card the stock scripts cannot even load it. `run_lowvram.py` subclasses the pipeline and keeps only the half of the AR–NAR Mixture-of-Transformers model that is in use on the GPU, parking the rest in system RAM:
 
