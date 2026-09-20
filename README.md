@@ -47,6 +47,14 @@ The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model 
 - **Compose** — style prompt (genre, instruments, vocal, language, tempo), lyrics with `[Verse]`/`[Chorus]` tags, plan mode, seed. *Load example* fills in the upstream song. `Ctrl+Enter` generates.
 - **Progress** — each stage live (plan score → semantic tokens → synthesize → decode) with tokens/s and an audio-length estimate, a *Cancel* button, and a queue for further requests.
 - **Result** — plays in the page; FLAC/WAV downloads; the generated score as sheet music (abcjs, bundled) or ABC text; *Load into composer* to remix; *Edit score* to change harmony or melody and re-render — the white-box editing flow from the upstream docs.
+- **Plan first** — *Plan score* writes just the score (~15 s) and shows it as sheet music; *Render this score* then generates the audio from exactly that plan, or *Edit in composer* lets you change it first.
+- **Takes** — generate up to 4 takes of the same request with different seeds; tick songs in the Library and *Compare selected* to play them side by side.
+- **Sampling** — temperature, top-p, top-k, repetition penalty and max length for the score and audio phases, CFG scale, and the number of ODE steps (upstream's `GenerationConfig`; blank = default).
+- **Score tools** (on the ABC box) — strip chords, keep only the vocal or instrumental line (upstream `abc_tools.py`), transpose by semitones (`abc_transpose.py`), set the tempo, a *Sections* editor to reorder / repeat / delete / halve sections, *Check* to validate and summarise, and *Compare with source* to prove an edit kept the notes.
+- **Cover a recording** — upload a song and SheetSage2 transcribes its melody (chord-free) straight into the score box; add lyrics and a style and generate (upstream's cover workflow). Requires the SheetSage2 environment (below).
+- **Re-decode (legacy)** — re-render a song's saved latents through the benchmark decoder `YuE2-Vae-legacy` in a few seconds for a second listening version.
+- **New take / Same score, new style** — one-click variations of any song in the Library.
+- **System** (header pill) — versions, GPU, model files and their hashes, storage, and whether the cover feature is ready.
 - **Library** — every song in `outputs/`, newest first. Each folder keeps `audio.flac`, `score.abc`, `plan.json`, `semantic.npy`, `latent.npy`, `request.json`, `result.json`. *Delete* moves a song's folder to `trash/` (restore by moving it back into `outputs/`; empty `trash/` by hand to reclaim disk).
 
 Flags: `--vram low|normal|auto` (see below), `--share` to let other devices on your network use it (below), `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
@@ -83,6 +91,19 @@ YuE\.venv\Scripts\python.exe webui.py --share --password "choose-something-long"
 Whatever the route: the PC stays on with the app running, generation still queues one at a time, and a phone on mobile data streams the FLAC fine (a 3-minute song is ~25 MB). If the PC is managed by an employer, check their policy before tunnelling it.
 
 **Leaving it running for days.** With `--share`/`--tunnel` the app asks Windows not to sleep while it runs (`--no-keep-awake` to disable), restarts `cloudflared` by itself if it exits (the public address changes then; the current one is always in `public_url.txt` and the share pill), and the internet launcher restarts the app if it ever crashes. Two things it cannot control: **Windows Update restarts** (pause updates for the period, Settings → Windows Update) and **logging off or closing the console window** (both end it). After a reboot nobody is logged in, so nothing runs until you sign in and start the launcher again; a Task Scheduler entry that runs the launcher at logon covers the sign-in part.
+
+### Cover a recording (SheetSage2)
+
+The cover feature runs upstream's SheetSage2 transcriber in its own environment (it pins a different torch). One-time setup, about 2.7 GB of extra downloads:
+
+```powershell
+py -3.11 -m venv .venv-sheetsage2
+.venv-sheetsage2\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+.venv-sheetsage2\Scripts\python.exe -m pip install huggingface-hub==0.36.0 transformers==4.45.2 safetensors==0.5.3 numpy==1.24.3 scipy==1.13.1 mir_eval==0.8.2 pretty_midi==0.2.10 mido==1.3.3 setuptools==78.1.1 soundfile
+YuE\.venv\Scripts\python.exe download_models.py --sheetsage2 --legacy-vae
+```
+
+`download_models.py --sheetsage2` fetches `m-a-p/SheetSage2` and its `MERT-v2-FullSong` encoder into `models/` and points the SheetSage2 config at the local encoder. `sheetsage_transcribe.py` decodes uploads with `soundfile` (wav, flac, mp3, ogg); other containers need FFmpeg on PATH. Transcription runs on the GPU between generations (the two never overlap) and takes about a minute for a 3-minute song.
 
 ## Command line
 

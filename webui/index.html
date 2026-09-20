@@ -19,7 +19,8 @@
   <div class="pills">
     <span class="pill" id="pill-model" title="Model state"><span class="dot"></span><span class="pill-text">Connecting…</span></span>
     <span class="pill" id="pill-gpu" title="GPU memory in use (all processes)"><span class="pill-text">GPU —</span></span>
-    <button class="pill share" id="pill-share" type="button" hidden title="Click to copy the address for people on your network"><span class="pill-text"></span></button>
+    <button class="pill share" id="pill-share" type="button" hidden title="Click for the address and a QR code"><span class="pill-text"></span></button>
+    <button class="pill" id="pill-doctor" type="button" title="Versions, models and hardware"><span class="pill-text">System</span></button>
   </div>
 </header>
 
@@ -49,13 +50,13 @@
         <span class="hint">Use section tags like <code>[Verse]</code>, <code>[Chorus]</code>, <code>[Bridge]</code>. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> generates.</span>
       </label>
 
-      <div class="row">
+      <div class="row three">
         <label class="field">
           <span class="label">Plan</span>
           <select id="cot">
-            <option value="full">Melody + chords (default)</option>
-            <option value="melody">Melody only, free accompaniment</option>
-            <option value="off">No symbolic plan</option>
+            <option value="full">Melody + chords</option>
+            <option value="melody">Melody only</option>
+            <option value="off">No plan</option>
           </select>
         </label>
         <label class="field seed-field">
@@ -65,30 +66,73 @@
             <button class="btn-icon" id="btn-dice" type="button" title="New random seed">🎲</button>
           </span>
         </label>
+        <label class="field">
+          <span class="label">Takes</span>
+          <select id="takes" title="Generate several takes with different seeds">
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+          </select>
+        </label>
       </div>
 
       <details class="advanced" id="advanced">
-        <summary>Advanced · score &amp; guidance</summary>
-        <label class="field">
-          <span class="label">CFG scale <em>optional</em></span>
-          <input id="cfg" type="number" min="0" max="20" step="0.05" placeholder="model default">
-        </label>
+        <summary>Score &amp; sampling</summary>
         <label class="field">
           <span class="label">Score (ABC) <em>optional</em></span>
           <textarea id="abc" rows="8" class="mono" placeholder="Paste or edit an ABC score here to render it instead of planning one. Needs plan mode “Melody + chords” or “Melody only”."></textarea>
-          <span class="hint">
-            Examples:
-            <button class="btn-link" type="button" data-score="melody">melody</button> ·
-            <button class="btn-link" type="button" data-score="score">score</button> ·
-            <button class="btn-link" type="button" data-score="score-jazz">score (jazz chords)</button> ·
-            <button class="btn-link" type="button" id="btn-clear-abc">clear</button>
-          </span>
         </label>
+        <div class="tools" id="abc-tools">
+          <button class="btn-mini" type="button" data-tool="strip-chords" title="Remove chord symbols (for melody-mode covers)">Strip chords</button>
+          <button class="btn-mini" type="button" data-tool="keep-voice" data-voice="Vocal" title="Keep only the vocal melody (chord-free)">Vocal only</button>
+          <button class="btn-mini" type="button" data-tool="keep-voice" data-voice="Ins" title="Keep only the instrumental melody (chord-free)">Instrument only</button>
+          <span class="tool-group"><button class="btn-mini" type="button" data-tool="transpose" data-semitones="-1">−1</button><input id="semitones" type="number" value="2" min="-24" max="24" title="semitones"><button class="btn-mini" type="button" data-tool="transpose" data-semitones="+">+n</button><button class="btn-mini" type="button" data-tool="transpose" data-semitones="1">+1</button></span>
+          <span class="tool-group"><input id="bpm" type="number" min="20" max="300" placeholder="BPM" title="new tempo"><button class="btn-mini" type="button" data-tool="tempo">Set tempo</button></span>
+          <button class="btn-mini" type="button" id="btn-sections" title="Reorder, repeat, delete or shorten sections">Sections…</button>
+          <button class="btn-mini" type="button" data-tool="inspect" title="Validate the score and summarise it">Check</button>
+          <button class="btn-mini" type="button" data-tool="compare" title="Compare with the score this was loaded from">Compare with source</button>
+          <button class="btn-link" type="button" id="btn-clear-abc">clear</button>
+        </div>
+        <pre class="abc-info mono" id="abc-info" hidden></pre>
+        <span class="hint">Examples: <button class="btn-link" type="button" data-score="melody">melody</button> · <button class="btn-link" type="button" data-score="score">score</button> · <button class="btn-link" type="button" data-score="score-jazz">score (jazz chords)</button></span>
+
+        <div class="sampling">
+          <div class="sampling-head">Sampling <em>blank = model default</em></div>
+          <div class="sampling-grid">
+            <span></span><span>Temp</span><span>Top-p</span><span>Top-k</span><span>Repeat pen.</span><span>Max tokens</span>
+            <span class="sampling-row">Score</span>
+            <input id="s-abc-temperature" type="number" step="0.05" min="0" max="3" placeholder="0.7">
+            <input id="s-abc-top_p" type="number" step="0.01" min="0.01" max="1" placeholder="0.9">
+            <input id="s-abc-top_k" type="number" step="1" min="1" max="2000" placeholder="30">
+            <input id="s-abc-repetition_penalty" type="number" step="0.005" min="0.5" max="3" placeholder="1.005">
+            <input id="s-abc-max_tokens" type="number" step="1" min="32" max="4096" placeholder="4096">
+            <span class="sampling-row">Audio</span>
+            <input id="s-semantic-temperature" type="number" step="0.05" min="0" max="3" placeholder="1.0">
+            <input id="s-semantic-top_p" type="number" step="0.01" min="0.01" max="1" placeholder="0.95">
+            <input id="s-semantic-top_k" type="number" step="1" min="1" max="2000" placeholder="100">
+            <input id="s-semantic-repetition_penalty" type="number" step="0.01" min="0.5" max="3" placeholder="1.2">
+            <input id="s-semantic-max_tokens" type="number" step="1" min="32" max="9000" placeholder="9000" title="25 tokens = 1 second of audio">
+          </div>
+          <div class="row two">
+            <label class="field"><span class="label">CFG scale <em>optional</em></span><input id="cfg" type="number" min="0" max="20" step="0.05" placeholder="model default"></label>
+            <label class="field"><span class="label">ODE steps <em>32 default</em></span><input id="ode" type="number" min="4" max="64" step="1" placeholder="32" title="fewer = faster synthesis, rougher audio"></label>
+          </div>
+        </div>
       </details>
 
-      <button class="btn-primary" id="btn-generate" type="submit">
-        <span class="btn-label">Generate song</span>
-      </button>
+      <details class="advanced" id="cover">
+        <summary>Cover a recording</summary>
+        <p class="hint">Upload a song and SheetSage2 transcribes its melody into the score box (chord-free, plan mode “Melody only”). Then write your lyrics and a new style, and generate.</p>
+        <input id="cover-file" type="file" accept="audio/*,.wav,.flac,.mp3,.ogg,.m4a,.aac,.opus">
+        <div class="row two tight">
+          <label class="check"><input id="cover-melody" type="checkbox" checked> melody only (chord-free)</label>
+          <button class="btn-ghost" id="btn-transcribe" type="button">Transcribe</button>
+        </div>
+        <p class="hint" id="cover-hint"></p>
+      </details>
+
+      <div class="row two tight">
+        <button class="btn-ghost" id="btn-plan" type="button" title="Write the score first (~15 s), then decide whether to render it">Plan score</button>
+        <button class="btn-primary" id="btn-generate" type="submit"><span class="btn-label">Generate song</span></button>
+      </div>
       <p class="hint center" id="compose-hint">About one minute of compute per minute of audio on this GPU. Songs queue one at a time.</p>
       <p class="error" id="form-error" hidden></p>
     </form>
@@ -116,38 +160,61 @@
       <div class="queue" id="queue" hidden></div>
     </div>
 
+    <div class="panel plan" id="plan" hidden>
+      <div class="panel-head">
+        <div><h2 id="plan-title"></h2><div class="sub" id="plan-meta"></div></div>
+        <span class="badge" id="plan-badge">Plan</span>
+      </div>
+      <div class="actions">
+        <button class="btn-primary slim" id="btn-render-plan" type="button">Render this score</button>
+        <button class="btn-ghost" id="btn-plan-edit" type="button" title="Put the score in the composer to edit it first">Edit in composer</button>
+        <button class="btn-ghost" id="btn-plan-discard" type="button">Discard</button>
+      </div>
+      <div class="score">
+        <div class="tabs"><button class="tab active" data-tab="sheet" data-target="plan" type="button">Sheet music</button><button class="tab" data-tab="abc" data-target="plan" type="button">ABC text</button></div>
+        <div class="sheet" id="plan-sheet"></div>
+        <pre class="abc mono" id="plan-abc" hidden></pre>
+      </div>
+    </div>
+
     <div class="panel result" id="result" hidden>
       <div class="panel-head">
-        <div>
-          <h2 id="result-title"></h2>
-          <div class="sub" id="result-meta"></div>
-        </div>
+        <div><h2 id="result-title"></h2><div class="sub" id="result-meta"></div></div>
         <span class="badge" id="result-badge"></span>
       </div>
       <p class="error" id="result-error" hidden></p>
       <audio id="player" controls preload="metadata"></audio>
+      <div class="alt" id="alt-block" hidden>
+        <div class="sub">Legacy decoder (benchmark VAE) version</div>
+        <audio id="alt-player" controls preload="metadata"></audio>
+      </div>
       <div class="actions">
         <a class="btn-ghost" id="dl-flac" download>Download FLAC</a>
         <a class="btn-ghost" id="dl-wav" download>Download WAV</a>
+        <button class="btn-ghost" id="btn-new-take" type="button" title="Same request, new seed">New take</button>
+        <button class="btn-ghost" id="btn-restyle" type="button" title="Keep this score, change the style prompt">Same score, new style</button>
+        <button class="btn-ghost" id="btn-redecode" type="button" title="Re-render the saved latents through the benchmark decoder (~10 s)">Re-decode (legacy)</button>
         <button class="btn-ghost" id="btn-load" type="button" title="Put this song's request back in the composer">Load into composer</button>
         <button class="btn-ghost" id="btn-edit-score" type="button" title="Put this score in the composer to edit and re-render">Edit score</button>
         <button class="btn-ghost danger" id="btn-delete" type="button" title="Move this song to the trash folder on the PC">Delete</button>
       </div>
       <div class="style-line" id="result-style"></div>
       <div class="score" id="score-block" hidden>
-        <div class="tabs">
-          <button class="tab active" data-tab="sheet" type="button">Sheet music</button>
-          <button class="tab" data-tab="abc" type="button">ABC text</button>
-        </div>
+        <div class="tabs"><button class="tab active" data-tab="sheet" data-target="result" type="button">Sheet music</button><button class="tab" data-tab="abc" data-target="result" type="button">ABC text</button></div>
         <div class="sheet" id="sheet"></div>
         <pre class="abc mono" id="abc-text" hidden></pre>
       </div>
     </div>
 
+    <div class="panel compare" id="compare" hidden>
+      <div class="panel-head"><h2>Compare</h2><button class="btn-ghost" id="btn-compare-close" type="button">Close</button></div>
+      <div class="compare-grid" id="compare-grid"></div>
+    </div>
+
     <div class="panel library">
       <div class="panel-head">
         <h2>Library</h2>
-        <span class="sub" id="library-count"></span>
+        <div class="library-tools"><span class="sub" id="library-count"></span><button class="btn-mini" id="btn-compare" type="button" hidden>Compare selected</button></div>
       </div>
       <ul class="songs" id="songs"></ul>
       <p class="empty" id="library-empty">Nothing yet — your generated songs will appear here, and they stay in <code>outputs\</code> on disk.</p>
@@ -161,8 +228,23 @@
     <img class="qr" id="share-qr" alt="QR code of the address">
     <div class="share-url mono" id="share-url"></div>
     <div class="actions"><button class="btn-ghost" id="share-copy" type="button">Copy address</button></div>
-    <p class="hint" id="share-note">Scan with the phone camera. If a password is set, the phone asks for it once (any username).</p>
+    <p class="hint" id="share-note">Scan with the phone camera. If a password is set, the phone asks for it once.</p>
     <ul class="share-list" id="share-list"></ul>
+  </div>
+</div>
+
+<div class="overlay" id="sections-overlay" hidden>
+  <div class="dialog wide">
+    <div class="panel-head"><div><h2>Sections</h2><div class="sub">Reorder, repeat, delete or shorten; the score in the composer is rewritten when you apply.</div></div><button class="btn-ghost" id="sections-close" type="button">Close</button></div>
+    <ol class="sections" id="sections-list"></ol>
+    <div class="actions"><button class="btn-primary slim" id="sections-apply" type="button">Apply to score</button><span class="hint" id="sections-total"></span></div>
+  </div>
+</div>
+
+<div class="overlay" id="doctor-overlay" hidden>
+  <div class="dialog wide">
+    <div class="panel-head"><h2>System</h2><button class="btn-ghost" id="doctor-close" type="button">Close</button></div>
+    <dl class="doctor" id="doctor-list"></dl>
   </div>
 </div>
 

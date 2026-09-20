@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -40,7 +40,15 @@ from run_lowvram import HERE, MODELS, REPO, VRAM_MODES, gpu_total_gib, make_pipe
 WEB = HERE / "webui"
 OUTPUTS = HERE / "outputs"
 TRASH = HERE / "trash"                  # deleted songs are moved here, not destroyed
+PLANS = HERE / "plans"                  # scores planned without audio (plan-first workflow)
+UPLOADS = HERE / "uploads"              # recordings uploaded for transcription
+TRANSCRIPTIONS = HERE / "transcriptions"
 EXAMPLES = REPO / "examples"
+ABC_TOOLS = REPO / "skills" / "yue2-music" / "scripts" / "abc_tools.py"
+LEGACY_VAE = MODELS / "YuE2-Vae-legacy"
+SHEETSAGE_PY = HERE / ".venv-sheetsage2" / "Scripts" / "python.exe"
+SHEETSAGE_MODEL = MODELS / "SheetSage2"
+MAX_UPLOAD_BYTES = 200 * 2**20
 TOKENS_PER_SECOND = 25            # semantic tokens per second of audio (25 Hz latents)
 mimetypes.add_type("audio/flac", ".flac")
 
@@ -93,17 +101,21 @@ class Job:
     id: str
     title: str
     request: dict
+    kind: str = "song"                 # song | plan | decode | transcribe
+    options: dict = field(default_factory=dict)   # sampling overrides, ode_steps, ...
     created: float = field(default_factory=time.time)
     state: str = "queued"              # queued | running | done | failed | cancelled
     error: str | None = None
     started: float | None = None
     finished: float | None = None
     cancel_requested: bool = False
+    result: dict | None = None
 
     def public(self):
-        return {"id": self.id, "title": self.title, "state": self.state, "error": self.error,
+        return {"id": self.id, "title": self.title, "kind": self.kind, "state": self.state, "error": self.error,
                 "created": self.created, "started": self.started, "finished": self.finished,
-                "request": self.request}
+                "request": {k: v for k, v in self.request.items() if k != "abc"} | ({"abc": True} if self.request.get("abc") else {}),
+                "options": self.options, "result": self.result}
 
 
 class Engine:
@@ -133,23 +145,20 @@ class Engine:
             self.model_state, self.model_error = "error", f"{type(exc).__name__}: {exc}"
             traceback.print_exc()
             return
+        work = {"song": self._work_song, "plan": self._work_plan, "decode": self._work_decode,
+                "transcribe": self._work_transcribe}
         while True:
             job = self.queue.get()
             if job.cancel_requested:
                 job.state, job.finished = "cancelled", time.time()
                 continue
-            self._generate(job)
+            self._run_job(job, work[job.kind])
 
-    def _generate(self, job):
+    def _run_job(self, job, work):
         with self.lock:
             self.current, job.state, job.started = job, "running", time.time()
-        out = OUTPUTS / job.id
         try:
-            song = self.pipe(**job.request, cancelled=lambda: job.cancel_requested)
-            out.mkdir(parents=True, exist_ok=True)
-            song.save(out / "audio.flac")           # audio first: a metadata problem must never lose the take
-            (out / "title.txt").write_text(job.title, encoding="utf-8")
-            song.save_artifacts(out)
+            job.result = work(job)
             job.state = "done"
         except InterruptedError:
             job.state = "cancelled"
@@ -164,6 +173,70 @@ class Engine:
             with self.lock:
                 self.current = None
 
+    @contextmanager
+    def _generation_options(self, options):
+        """Apply per-job ODE step overrides to the (single-threaded) pipeline, then restore."""
+        import dataclasses
+        original = self.pipe.generation_config
+        if options.get("ode_steps"):
+            self.pipe.generation_config = dataclasses.replace(original, ode_steps=int(options["ode_steps"]))
+        try:
+            yield
+        finally:
+            self.pipe.generation_config = original
+
+    def _work_song(self, job):
+        out = OUTPUTS / job.id
+        with self._generation_options(job.options):
+            song = self.pipe(**job.request, abc_sampling=job.options.get("abc_sampling"),
+                             semantic_sampling=job.options.get("semantic_sampling"),
+                             cancelled=lambda: job.cancel_requested)
+        out.mkdir(parents=True, exist_ok=True)
+        song.save(out / "audio.flac")               # audio first: a metadata problem must never lose the take
+        (out / "title.txt").write_text(job.title, encoding="utf-8")
+        song.save_artifacts(out)
+        return {"song_id": job.id, "seconds": len(song.audio) / song.sample_rate, "truncated": song.truncated}
+
+    def _work_plan(self, job):
+        plan = self.pipe.plan(**job.request, abc_sampling=job.options.get("abc_sampling"),
+                              cancelled=lambda: job.cancel_requested)
+        out = PLANS / job.id
+        plan.save(out)
+        (out / "title.txt").write_text(job.title, encoding="utf-8")
+        (out / "request.json").write_text(json.dumps(job.request, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"plan_id": job.id, "abc": plan.abc, "tokens": len(plan.abc_ids), "truncated": bool(plan.truncated),
+                "seconds": (plan.timing or {}).get("seconds")}
+
+    def _work_decode(self, job):
+        import numpy as np
+        import soundfile as sf
+        song_id, vae_dir = job.request["song_id"], Path(job.request["vae_dir"])
+        latents = np.load(OUTPUTS / song_id / "latent.npy")
+        audio = self.pipe.decode(latents, vae=str(vae_dir))
+        name = job.request.get("output_name", "audio-legacy.flac")
+        sf.write(OUTPUTS / song_id / name, audio, 48000, subtype="PCM_24")
+        return {"song_id": song_id, "audio": f"/outputs/{song_id}/{name}", "seconds": len(audio) / 48000}
+
+    def _work_transcribe(self, job):
+        out = TRANSCRIPTIONS / job.id
+        command = [str(SHEETSAGE_PY), "-X", "utf8", str(HERE / "sheetsage_transcribe.py"), job.request["path"], "--output", str(out)]
+        if not job.request.get("melody_only", True):
+            command.append("--full")
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                   encoding="utf-8", errors="replace", cwd=str(HERE))
+        lines = []
+        for line in process.stdout:
+            lines.append(line.rstrip())
+            if job.cancel_requested:
+                process.terminate()
+                raise InterruptedError("Transcription cancelled")
+        process.wait()
+        result = next((json.loads(l[7:]) for l in lines if l.startswith("RESULT ")), None)
+        if process.returncode or result is None:
+            tail = "\n".join(l for l in lines[-12:] if l.strip())
+            raise RuntimeError("SheetSage2 failed:\n" + tail[-1500:])
+        return {"transcription_id": job.id, **result}
+
     def _release_gpu(self):
         """Park the transformer in RAM between jobs so the card is free for other apps."""
         try:
@@ -175,8 +248,10 @@ class Engine:
             torch.cuda.empty_cache()
 
     # public API -------------------------------------------------------------
-    def submit(self, title, request):
-        job = Job(id=unique_id(title), title=title, request=request)
+    def submit(self, title, request, kind="song", options=None):
+        base = {"song": OUTPUTS, "plan": PLANS, "decode": OUTPUTS, "transcribe": TRANSCRIPTIONS}[kind]
+        job_id = unique_id(title, base) if kind != "decode" else f"decode-{request['song_id']}-{int(time.time())}"
+        job = Job(id=job_id, title=title, request=request, kind=kind, options=options or {})
         self.jobs[job.id] = job
         self.queue.put(job)
         return job
@@ -215,10 +290,10 @@ def slugify(text, fallback="song"):
     return slug or fallback
 
 
-def unique_id(title):
+def unique_id(title, base_dir=OUTPUTS):
     base = f"{datetime.now():%Y%m%d-%H%M%S}-{slugify(title)}"
     candidate, n = base, 2
-    while (OUTPUTS / candidate).exists():
+    while (base_dir / candidate).exists():
         candidate, n = f"{base}-{n}", n + 1
     return candidate
 
@@ -251,6 +326,20 @@ def library():
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
+ID_RE = r"[A-Za-z0-9][A-Za-z0-9_.-]*"
+
+
+class SamplingOverride(BaseModel):
+    temperature: float | None = Field(default=None, ge=0, le=3)
+    top_p: float | None = Field(default=None, gt=0, le=1)
+    top_k: int | None = Field(default=None, ge=1, le=2000)
+    repetition_penalty: float | None = Field(default=None, ge=0.5, le=3)
+    max_tokens: int | None = Field(default=None, ge=32, le=9000)
+
+    def overrides(self):
+        return {k: v for k, v in self.model_dump().items() if v is not None} or None
+
+
 class GenerateRequest(BaseModel):
     title: str = ""
     style: str
@@ -259,6 +348,57 @@ class GenerateRequest(BaseModel):
     seed: int | None = None
     abc: str | None = None
     cfg_scale: float | None = Field(default=None, ge=0, le=20)
+    takes: int = Field(default=1, ge=1, le=4)
+    abc_sampling: SamplingOverride | None = None
+    semantic_sampling: SamplingOverride | None = None
+    ode_steps: int | None = Field(default=None, ge=4, le=64)
+
+
+class AbcToolRequest(BaseModel):
+    action: str
+    abc: str
+    abc2: str | None = None
+    voice: str = "both"
+    semitones: int = Field(default=0, ge=-24, le=24)
+    bpm: int | None = Field(default=None, ge=20, le=300)
+    allow_tempo_change: bool = False
+
+
+def build_request(body: GenerateRequest):
+    """Validate a web request into (title, SongRequest kwargs, generation options) or raise 422."""
+    from yue2.protocol import GenerationConfig, resolve_sampling
+    style, lyrics = body.style.strip(), body.lyrics.strip()
+    if not style or not lyrics:
+        raise HTTPException(422, "Style and lyrics are both required.")
+    if body.cot not in {"full", "melody", "off"}:
+        raise HTTPException(422, "cot must be full, melody or off.")
+    abc = body.abc.strip() if body.abc and body.abc.strip() else None
+    if abc and body.cot == "off":
+        raise HTTPException(422, "A supplied score needs the full or melody plan mode.")
+    seed = body.seed if body.seed is not None else random.randrange(2**31)
+    if not 0 <= seed < 2**63:
+        raise HTTPException(422, "Seed must be in [0, 2**63).")
+    title = body.title.strip() or " ".join(lyrics.replace("[", " ").replace("]", " ").split()[:5]) or "song"
+    request = {"style": style, "lyrics": lyrics, "cot": body.cot, "seed": seed, "id": slugify(title)}
+    if abc:
+        request["abc"] = abc
+    if body.cfg_scale is not None:
+        request["cfg_scale"] = body.cfg_scale
+    options, defaults = {}, GenerationConfig()
+    for key, default, cap in (("abc_sampling", defaults.abc, 4096), ("semantic_sampling", defaults.semantic, 9000)):
+        override = getattr(body, key)
+        values = override.overrides() if override else None
+        if values:
+            if values.get("max_tokens", 0) > cap:
+                raise HTTPException(422, f"{key}.max_tokens must be at most {cap}")
+            try:
+                resolve_sampling(values, default)
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(422, f"{key}: {exc}")
+            options[key] = values
+    if body.ode_steps:
+        options["ode_steps"] = body.ode_steps
+    return title, request, options
 
 
 def build_app(engine: Engine, password: str | None = None):
@@ -284,29 +424,33 @@ def build_app(engine: Engine, password: str | None = None):
                   for name in ("melody", "score", "score-jazz") if (EXAMPLES / f"{name}.abc").is_file()}
         return {"song": song, "scores": scores}
 
-    @app.post("/api/generate")
-    def generate(body: GenerateRequest):
+    def ready():
         if engine.model_state == "error":
             raise HTTPException(503, f"Model failed to load: {engine.model_error}")
-        style, lyrics = body.style.strip(), body.lyrics.strip()
-        if not style or not lyrics:
-            raise HTTPException(422, "Style and lyrics are both required.")
-        if body.cot not in {"full", "melody", "off"}:
-            raise HTTPException(422, "cot must be full, melody or off.")
-        abc = body.abc.strip() if body.abc and body.abc.strip() else None
-        if abc and body.cot == "off":
-            raise HTTPException(422, "A supplied score needs the full or melody plan mode.")
-        seed = body.seed if body.seed is not None else random.randrange(2**31)
-        if not 0 <= seed < 2**63:
-            raise HTTPException(422, "Seed must be in [0, 2**63).")
-        title = body.title.strip() or " ".join(lyrics.replace("[", " ").replace("]", " ").split()[:5]) or "song"
-        request = {"style": style, "lyrics": lyrics, "cot": body.cot, "seed": seed, "id": slugify(title)}
-        if abc:
-            request["abc"] = abc
-        if body.cfg_scale is not None:
-            request["cfg_scale"] = body.cfg_scale
-        job = engine.submit(title, request)
-        return job.public()
+
+    @app.post("/api/generate")
+    def generate(body: GenerateRequest):
+        ready()
+        title, request, options = build_request(body)
+        jobs = []
+        for k in range(body.takes):
+            req = dict(request)
+            if body.takes > 1:
+                req["seed"] = request["seed"] + k if body.seed is not None else random.randrange(2**31)
+            name = f"{title} (take {k + 1}/{body.takes})" if body.takes > 1 else title
+            jobs.append(engine.submit(name, req, options=options))
+        return {**jobs[0].public(), "jobs": [j.public() for j in jobs]}
+
+    @app.post("/api/plan")
+    def plan(body: GenerateRequest):
+        ready()
+        title, request, options = build_request(body)
+        if request["cot"] == "off":
+            raise HTTPException(422, "Planning a score needs the full or melody mode.")
+        if request.get("abc"):
+            raise HTTPException(422, "A supplied score already is the plan; render it instead.")
+        options = {k: v for k, v in options.items() if k == "abc_sampling"}
+        return engine.submit(title, request, kind="plan", options=options).public()
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str):
@@ -339,7 +483,88 @@ def build_app(engine: Engine, password: str | None = None):
         result = read_json(directory / "result.json") or {}
         score = (directory / "score.abc").read_text(encoding="utf-8") if summary["has_score"] else None
         return {**summary, "request": request, "timing": result.get("timing"),
-                "score": score, "audio_url": f"/outputs/{song_id}/audio.flac"}
+                "score": score, "audio_url": f"/outputs/{song_id}/audio.flac",
+                "alt_audio": f"/outputs/{song_id}/audio-legacy.flac" if (directory / "audio-legacy.flac").is_file() else None,
+                "has_latent": (directory / "latent.npy").is_file(), "legacy_vae_available": LEGACY_VAE.is_dir()}
+
+    @app.get("/api/plans/{plan_id}")
+    def plan_detail(plan_id: str):
+        directory = PLANS / plan_id
+        if not re.fullmatch(ID_RE, plan_id) or not (directory / "score.abc").is_file():
+            raise HTTPException(404, "Unknown plan")
+        title = directory / "title.txt"
+        return {"id": plan_id, "abc": (directory / "score.abc").read_text(encoding="utf-8"),
+                "request": read_json(directory / "request.json") or {},
+                "title": title.read_text(encoding="utf-8").strip() if title.is_file() else plan_id}
+
+    @app.post("/api/songs/{song_id}/redecode")
+    def redecode(song_id: str):
+        ready()
+        directory = OUTPUTS / song_id
+        if not re.fullmatch(ID_RE, song_id) or not (directory / "latent.npy").is_file():
+            raise HTTPException(404, "No saved latents for that song")
+        if not LEGACY_VAE.is_dir():
+            raise HTTPException(501, "The legacy decoder is not downloaded (run download_models.py --legacy-vae).")
+        title = directory / "title.txt"
+        name = title.read_text(encoding="utf-8").strip() if title.is_file() else song_id
+        return engine.submit(f"{name} (legacy decoder)", {"song_id": song_id, "vae_dir": str(LEGACY_VAE),
+                             "output_name": "audio-legacy.flac"}, kind="decode").public()
+
+    @app.post("/api/abc/tool")
+    def abc_tool(body: AbcToolRequest):
+        return run_abc_tool(body)
+
+    @app.post("/api/transcribe")
+    async def transcribe(file: UploadFile = File(...), melody_only: bool = Form(True), title: str = Form("")):
+        if not SHEETSAGE_PY.is_file() or not (SHEETSAGE_MODEL / "config.json").is_file():
+            raise HTTPException(501, "SheetSage2 is not set up on this PC (see README: Cover a recording).")
+        ready()
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", file.filename or "recording").strip("-.")[:80] or "recording"
+        if Path(name).suffix.lower() not in {".wav", ".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac", ".aiff", ".aif", ".wma", ".webm"}:
+            raise HTTPException(422, "Upload an audio file (wav, flac, mp3, ogg, m4a, ...).")
+        data = await file.read()
+        if not data:
+            raise HTTPException(422, "The file is empty.")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"Keep uploads under {MAX_UPLOAD_BYTES // 2**20} MB.")
+        stem = title.strip() or Path(name).stem
+        folder = UPLOADS / unique_id(stem, UPLOADS)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(data)
+        return engine.submit(f"Transcribe {stem}", {"path": str(folder / name), "melody_only": melody_only,
+                             "filename": name}, kind="transcribe").public()
+
+    @app.get("/api/doctor")
+    def doctor():
+        import platform
+        gpu = None
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info(0)
+            gpu = {"name": torch.cuda.get_device_name(0), "capability": ".".join(map(str, torch.cuda.get_device_capability(0))),
+                   "total_gib": round(total / 2**30, 2), "free_gib": round(free / 2**30, 2)}
+
+        def folder(path):
+            files = [f for f in path.rglob("*") if f.is_file()] if path.is_dir() else []
+            return {"path": str(path), "present": bool(files), "size_gb": round(sum(f.stat().st_size for f in files) / 2**30, 2)}
+        import importlib.metadata as meta
+        versions = {}
+        for pkg in ("yue2-infer", "torch", "transformers", "fastapi", "huggingface-hub"):
+            try:
+                versions[pkg] = meta.version(pkg)
+            except meta.PackageNotFoundError:
+                versions[pkg] = None
+        return {"python": platform.python_version(), "platform": platform.platform(), "versions": versions,
+                "cuda": torch.version.cuda, "cudnn": torch.backends.cudnn.version() if torch.cuda.is_available() else None,
+                "gpu": gpu, "vram_mode": engine.vram_mode, "quantization": engine.args.quantization,
+                "graph_attention": engine.args.graph_attention, "model_state": engine.model_state, "model_error": engine.model_error,
+                "weights": getattr(engine.pipe, "weights", None),
+                "models": {name: folder(path) for name, path in (("YuE2-3B", MODELS / "YuE2-3B"), ("YuE2-Vae", MODELS / "YuE2-Vae"),
+                           ("YuE2-Vae-legacy", LEGACY_VAE), ("SheetSage2", SHEETSAGE_MODEL), ("MERT-v2-FullSong", MODELS / "MERT-v2-FullSong"))},
+                "sheetsage2_env": SHEETSAGE_PY.is_file(), "ffmpeg": bool(shutil.which("ffmpeg")) or (HERE / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe").is_file(),
+                "cloudflared": str(find_cloudflared() or ""), "share_urls": getattr(engine, "share_urls", []),
+                "disk_free_gb": round(shutil.disk_usage(str(HERE)).free / 2**30, 1),
+                "songs": len(library()), "plans": len([d for d in PLANS.iterdir() if d.is_dir()]) if PLANS.is_dir() else 0,
+                "trash": len([d for d in TRASH.iterdir() if d.is_dir()]) if TRASH.is_dir() else 0}
 
     @app.delete("/api/songs/{song_id}")
     def delete_song(song_id: str):
@@ -449,6 +674,58 @@ def main():
     elif args.host == "0.0.0.0":
         print("  No password set: anyone who can reach this address can use it (--password to require one)\n", file=sys.stderr)
     uvicorn.run(build_app(engine, args.password), host=args.host, port=args.port, log_level="warning")
+
+
+def run_abc_tool(body):
+    """Score helpers: upstream abc_tools.py (strip chords / keep a voice / inspect / compare),
+    the local transposer, and a tempo rewrite."""
+    import tempfile
+
+    def tool(*args):
+        return subprocess.run([sys.executable, "-X", "utf8", str(ABC_TOOLS), *args], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=120)
+
+    if body.action == "transpose":
+        from abc_transpose import transpose_abc
+        try:
+            return {"abc": transpose_abc(body.abc, int(body.semitones))}
+        except Exception as exc:
+            raise HTTPException(422, f"Could not transpose: {exc}")
+    if body.action == "tempo":
+        if not body.bpm:
+            raise HTTPException(422, "bpm is required")
+        new, count = re.subn(r"^(Q:\s*\S+=)\d+", lambda m: f"{m.group(1)}{int(body.bpm)}", body.abc, count=1, flags=re.M)
+        if not count:
+            raise HTTPException(422, "The score has no Q: tempo line")
+        return {"abc": new}
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "score.abc"
+        src.write_bytes(body.abc.encode("utf-8"))
+        if body.action in ("strip-chords", "keep-voice"):
+            voice = body.voice if body.action == "keep-voice" else "both"
+            if voice not in ("both", "Vocal", "Ins"):
+                raise HTTPException(422, "voice must be both, Vocal or Ins")
+            out = Path(tmp) / "out.abc"
+            result = tool("strip-chords", str(src), str(out), "--keep-voice", voice)
+            if result.returncode:
+                raise HTTPException(422, (result.stderr or result.stdout).strip()[-800:] or "abc_tools failed")
+            return {"abc": out.read_text(encoding="utf-8")}
+        if body.action == "inspect":
+            result = tool("inspect", str(src))
+            if result.returncode:
+                raise HTTPException(422, (result.stderr or result.stdout).strip()[-800:] or "The score does not parse")
+            info = json.loads(result.stdout)
+            summary = {k: v for k, v in info.items() if k != "voices"}
+            summary["voices"] = {name: {k: v for k, v in data.items() if k not in ("notes", "bars", "chords")}
+                                 for name, data in info.get("voices", {}).items()}
+            return summary
+        if body.action == "compare":
+            edited = Path(tmp) / "edited.abc"
+            edited.write_bytes((body.abc2 or "").encode("utf-8"))
+            args = ["compare", str(src), str(edited)] + (["--allow-tempo-change"] if body.allow_tempo_change else [])
+            result = tool(*args)
+            return {"ok": result.returncode == 0, "report": (result.stdout + result.stderr).strip()[-4000:]}
+    raise HTTPException(422, "Unknown action")
 
 
 LOGIN_PAGE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

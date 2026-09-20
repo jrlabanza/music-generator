@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--models-dir", type=Path, default=HERE / "models")
     parser.add_argument("--legacy-vae", action="store_true",
                         help="also fetch m-a-p/YuE2-Vae-legacy, the decoder used for the published benchmarks")
+    parser.add_argument("--sheetsage2", action="store_true",
+                        help="also fetch m-a-p/SheetSage2 and its MERT-v2-FullSong encoder (2.6 GB) for the cover feature")
     args = parser.parse_args()
     from huggingface_hub import snapshot_download
     from yue2.storage import MODEL_FILES, MODEL_LICENSES
@@ -29,12 +31,40 @@ def main():
     repos = dict(REPOS)
     if args.legacy_vae:
         repos["YuE2-Vae-legacy"] = "m-a-p/YuE2-Vae-legacy"
+    extra = {}
+    if args.sheetsage2:
+        extra = {"SheetSage2": ("m-a-p/SheetSage2", ["*.py", "*.json", "*.txt", "*.safetensors"]),
+                 "MERT-v2-FullSong": ("m-a-p/MERT-v2-FullSong", ["*.py", "*.json", "*.safetensors"])}
     start = time.perf_counter()
     for name, repo in repos.items():
         target = args.models_dir / name
         print(f"{repo} -> {target}", flush=True)
         snapshot_download(repo, local_dir=target, allow_patterns=patterns)
         print(f"  done ({time.perf_counter() - start:.0f}s elapsed)", flush=True)
+    for name, (repo, allow) in extra.items():
+        target = args.models_dir / name
+        print(f"{repo} -> {target}", flush=True)
+        snapshot_download(repo, local_dir=target, allow_patterns=allow)
+        print(f"  done ({time.perf_counter() - start:.0f}s elapsed)", flush=True)
+    if args.sheetsage2:                      # SheetSage2 loads its encoder by hub id; point it at the local copy
+        import json
+        config = args.models_dir / "SheetSage2" / "config.json"
+        data = json.loads(config.read_text(encoding="utf-8"))
+        local = str((args.models_dir / "MERT-v2-FullSong").resolve())
+
+        def patch(obj):
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    if value == "m-a-p/MERT-v2-FullSong":
+                        obj[key] = local
+                    else:
+                        patch(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    patch(value)
+        patch(data)
+        config.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print("SheetSage2 config points at", local)
     print("All models downloaded.")
 
 
