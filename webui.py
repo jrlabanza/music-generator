@@ -39,6 +39,7 @@ from run_lowvram import HERE, MODELS, REPO, VRAM_MODES, gpu_total_gib, make_pipe
 
 WEB = HERE / "webui"
 OUTPUTS = HERE / "outputs"
+TRASH = HERE / "trash"                  # deleted songs are moved here, not destroyed
 EXAMPLES = REPO / "examples"
 TOKENS_PER_SECOND = 25            # semantic tokens per second of audio (25 Hz latents)
 mimetypes.add_type("audio/flac", ".flac")
@@ -339,6 +340,24 @@ def build_app(engine: Engine, password: str | None = None):
         score = (directory / "score.abc").read_text(encoding="utf-8") if summary["has_score"] else None
         return {**summary, "request": request, "timing": result.get("timing"),
                 "score": score, "audio_url": f"/outputs/{song_id}/audio.flac"}
+
+    @app.delete("/api/songs/{song_id}")
+    def delete_song(song_id: str):
+        directory = OUTPUTS / song_id
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", song_id) or not directory.is_dir():
+            raise HTTPException(404, "Unknown song")
+        job = engine.jobs.get(song_id)
+        if job is not None and job.state == "running":
+            raise HTTPException(409, "That song is still generating; cancel it instead.")
+        TRASH.mkdir(exist_ok=True)
+        target = TRASH / song_id
+        if target.exists():
+            target = TRASH / f"{song_id}-{int(time.time())}"
+        try:
+            shutil.move(str(directory), str(target))
+        except OSError:
+            raise HTTPException(409, "Could not delete: a file in it is still open (playing in a browser?). Stop playback and try again.")
+        return {"deleted": song_id, "moved_to": str(target)}
 
     @app.get("/api/qr.svg")
     def qr(text: str):

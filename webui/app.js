@@ -10,7 +10,7 @@
     bar: $("bar"), stats: $("stats"), queue: $("queue"), cancel: $("btn-cancel"),
     result: $("result"), resultTitle: $("result-title"), resultMeta: $("result-meta"), resultBadge: $("result-badge"),
     resultError: $("result-error"), player: $("player"), dlFlac: $("dl-flac"), dlWav: $("dl-wav"),
-    load: $("btn-load"), editScore: $("btn-edit-score"), resultStyle: $("result-style"), scoreBlock: $("score-block"),
+    load: $("btn-load"), editScore: $("btn-edit-score"), del: $("btn-delete"), resultStyle: $("result-style"), scoreBlock: $("score-block"),
     sheet: $("sheet"), abcText: $("abc-text"), songs: $("songs"), libraryEmpty: $("library-empty"), libraryCount: $("library-count"),
   };
   const TOKENS_PER_SECOND = 25;
@@ -265,7 +265,7 @@
     el.player.hidden = true;
     el.scoreBlock.hidden = true;
     el.resultStyle.textContent = "";
-    [el.dlFlac, el.dlWav, el.load, el.editScore].forEach((node) => (node.hidden = true));
+    [el.dlFlac, el.dlWav, el.load, el.editScore, el.del].forEach((node) => (node.hidden = true));
     state.song = null;
   }
   async function openSong(id, { scroll = true } = {}) {
@@ -287,7 +287,7 @@
     el.player.src = song.audio_url;
     el.dlFlac.href = song.audio_url; el.dlFlac.download = `${song.id}.flac`;
     el.dlWav.href = `/api/songs/${song.id}/audio.wav`; el.dlWav.download = `${song.id}.wav`;
-    [el.dlFlac, el.dlWav, el.load].forEach((node) => (node.hidden = false));
+    [el.dlFlac, el.dlWav, el.load, el.del].forEach((node) => (node.hidden = false));
     el.editScore.hidden = !song.score;
     renderScore(song.score);
     renderLibrary();
@@ -324,6 +324,28 @@
     fillForm({ title: `${title} (edited)`, style: request.style, lyrics: request.lyrics, cot: request.cot === "off" ? "full" : request.cot, seed: request.seed, abc: score });
     el.abc.scrollIntoView({ behavior: "smooth", block: "center" });
     el.abc.focus();
+  });
+
+  el.del.addEventListener("click", async () => {
+    const song = state.song;
+    if (!song) return;
+    if (!confirm(`Delete "${song.title}"?
+
+It moves to the trash folder on the PC (trash\${song.id}), so it can be restored by hand.`)) return;
+    el.player.pause(); el.player.removeAttribute("src"); el.player.load();   // release the file
+    el.del.disabled = true;
+    try {
+      await api(`/api/songs/${song.id}`, { method: "DELETE" });
+      state.song = null; state.selected = null;
+      el.result.hidden = true;
+      await loadLibrary();
+      if (state.songs.length) openSong(state.songs[0].id, { scroll: false }).catch(() => {});
+    } catch (error) {
+      alert(error.message);
+      openSong(song.id, { scroll: false }).catch(() => {});
+    } finally {
+      el.del.disabled = false;
+    }
   });
 
   // ── library ────────────────────────────────────────────────────────────

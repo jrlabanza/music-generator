@@ -19,3 +19,5 @@ songs/private/
 # local secrets
 password.txt
 public_url.txt
+# deleted songs (restore by moving a folder back into outputs/)
+trash/
