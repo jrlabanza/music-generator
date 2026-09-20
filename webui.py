@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -170,6 +170,7 @@ class Engine:
         finally:
             job.finished = time.time()
             self._release_gpu()
+            sweep_deleted()
             with self.lock:
                 self.current = None
 
@@ -308,7 +309,7 @@ def read_json(path):
 def song_summary(directory: Path):
     result = read_json(directory / "result.json")
     request = read_json(directory / "request.json")
-    if result is None or request is None or not (directory / "audio.flac").is_file():
+    if result is None or request is None or not (directory / "audio.flac").is_file() or (directory / ".deleted").exists():
         return None
     title_file = directory / "title.txt"
     title = title_file.read_text(encoding="utf-8").strip() if title_file.is_file() else request.get("id", directory.name)
@@ -323,6 +324,37 @@ def song_summary(directory: Path):
 def library():
     songs = [s for d in OUTPUTS.iterdir() if d.is_dir() and (s := song_summary(d))] if OUTPUTS.is_dir() else []
     return sorted(songs, key=lambda s: s["created"], reverse=True)
+
+
+def move_to_trash(directory: Path, attempts=8, delay=0.25):
+    """Move a song folder into trash/, retrying briefly: on Windows a folder cannot move
+    while any file in it is open, and a browser's aborted download takes a moment to close."""
+    TRASH.mkdir(exist_ok=True)
+    target = TRASH / directory.name
+    if target.exists():
+        target = TRASH / f"{directory.name}-{int(time.time())}"
+    for attempt in range(attempts):
+        try:
+            # A plain rename: all-or-nothing. (shutil.move would fall back to copy-then-delete
+            # and could leave a half-deleted folder when one file is still open.)
+            os.rename(directory, target)
+            return target
+        except OSError:
+            if attempt == attempts - 1:
+                return None
+            time.sleep(delay)
+
+
+def sweep_deleted():
+    """Finish deferred deletions (folders marked .deleted while a file was still open)."""
+    if not OUTPUTS.is_dir():
+        return 0
+    moved = 0
+    for directory in OUTPUTS.iterdir():
+        if directory.is_dir() and (directory / ".deleted").exists():
+            if move_to_trash(directory, attempts=1):
+                moved += 1
+    return moved
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -404,9 +436,31 @@ def build_request(body: GenerateRequest):
 def build_app(engine: Engine, password: str | None = None):
     app = FastAPI(title="Music Gen Studio")
     OUTPUTS.mkdir(exist_ok=True)
+    sweep_deleted()
     if password:
         install_password(app, password)
-    app.mount("/outputs", StaticFiles(directory=OUTPUTS), name="outputs")
+    @app.get("/outputs/{path:path}")
+    def output_file(path: str, request: Request):
+        """Serve song files from memory: the file is opened and closed at once, so a
+        paused player's suspended download never pins the folder open on Windows."""
+        root = OUTPUTS.resolve()
+        file = (OUTPUTS / path).resolve()
+        if root not in file.parents or not file.is_file() or (file.parent / ".deleted").exists():
+            raise HTTPException(404, "Not found")
+        data = file.read_bytes()
+        size = len(data)
+        media = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+        headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-cache"}
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", request.headers.get("range", "").strip())
+        if match and size:
+            first, last = match.group(1), match.group(2)
+            start = int(first) if first else max(0, size - int(last or 0))
+            end = min(int(last), size - 1) if (first and last) else size - 1
+            if start > end or start >= size:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            return Response(data[start:end + 1], status_code=206, media_type=media, headers=headers)
+        return Response(data, media_type=media, headers=headers)
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
     @app.get("/", response_class=HTMLResponse)
@@ -471,6 +525,7 @@ def build_app(engine: Engine, password: str | None = None):
 
     @app.get("/api/songs")
     def songs():
+        sweep_deleted()                  # finish deferred deletions whenever the library is listed
         return library()
 
     @app.get("/api/songs/{song_id}")
@@ -574,15 +629,13 @@ def build_app(engine: Engine, password: str | None = None):
         job = engine.jobs.get(song_id)
         if job is not None and job.state == "running":
             raise HTTPException(409, "That song is still generating; cancel it instead.")
-        TRASH.mkdir(exist_ok=True)
-        target = TRASH / song_id
-        if target.exists():
-            target = TRASH / f"{song_id}-{int(time.time())}"
-        try:
-            shutil.move(str(directory), str(target))
-        except OSError:
-            raise HTTPException(409, "Could not delete: a file in it is still open (playing in a browser?). Stop playback and try again.")
-        return {"deleted": song_id, "moved_to": str(target)}
+        target = move_to_trash(directory)
+        if target is not None:
+            return {"deleted": song_id, "moved_to": str(target), "deferred": False}
+        # Something still holds a file open (a suspended download, a media player). Hide the
+        # song now and finish the move when the handle is released.
+        (directory / ".deleted").write_text(str(time.time()), encoding="utf-8")
+        return {"deleted": song_id, "moved_to": None, "deferred": True}
 
     @app.get("/api/qr.svg")
     def qr(text: str):

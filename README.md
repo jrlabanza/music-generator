@@ -55,7 +55,7 @@ The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model 
 - **Re-decode (legacy)** — re-render a song's saved latents through the benchmark decoder `YuE2-Vae-legacy` in a few seconds for a second listening version.
 - **New take / Same score, new style** — one-click variations of any song in the Library.
 - **System** (header pill) — versions, GPU, model files and their hashes, storage, and whether the cover feature is ready.
-- **Library** — every song in `outputs/`, newest first. Each folder keeps `audio.flac`, `score.abc`, `plan.json`, `semantic.npy`, `latent.npy`, `request.json`, `result.json`. *Delete* moves a song's folder to `trash/` (restore by moving it back into `outputs/`; empty `trash/` by hand to reclaim disk).
+- **Library** — every song in `outputs/`, newest first. Each folder keeps `audio.flac`, `score.abc`, `plan.json`, `semantic.npy`, `latent.npy`, `request.json`, `result.json`. *Delete* moves a song's folder to `trash/` (restore by moving it back into `outputs/`; empty `trash/` by hand to reclaim disk). It works while the song is loaded in players — files are served from memory so the server never pins them — and if some other program holds a file open, the song is hidden at once and moved as soon as the file is released.
 
 Flags: `--vram low|normal|auto` (see below), `--share` to let other devices on your network use it (below), `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
 

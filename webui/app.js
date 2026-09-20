@@ -503,14 +503,15 @@
     const song = state.song;
     if (!song) return;
     if (!confirm(`Delete "${song.title}"?\n\nIt moves to the trash folder on the PC (trash\\${song.id}), so it can be restored by hand.`)) return;
-    el.player.pause(); el.player.removeAttribute("src"); el.player.load();
-    el.altPlayer.pause(); el.altPlayer.removeAttribute("src"); el.altPlayer.load();
+    // release every player that may hold a suspended download of this song's files
+    for (const audio of [el.player, el.altPlayer, ...el.compareGrid.querySelectorAll("audio")]) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
     el.del.disabled = true;
     try {
-      await api(`/api/songs/${song.id}`, { method: "DELETE" });
+      const reply = await api(`/api/songs/${song.id}`, { method: "DELETE" });
       state.song = null; state.selected = null; state.compare.delete(song.id);
       el.result.hidden = true;
       await loadLibrary();
+      if (reply.deferred) el.libraryCount.textContent = "deleted — the folder moves to trash once every player lets go of it";
       if (state.songs.length) openSong(state.songs[0].id, { scroll: false }).catch(() => {});
     } catch (error) {
       alert(error.message);
