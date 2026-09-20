@@ -426,7 +426,7 @@ def main():
     if args.open:
         threading.Thread(target=open_when_ready, args=(browse_host, args.port, url), daemon=True).start()
     if args.password:
-        print("  Password protection is on (HTTP Basic auth)\n", file=sys.stderr)
+        print("  Password protection is on (sign-in page at /login)\n", file=sys.stderr)
     elif args.host == "0.0.0.0":
         print("  No password set: anyone who can reach this address can use it (--password to require one)\n", file=sys.stderr)
     uvicorn.run(build_app(engine, args.password), host=args.host, port=args.port, log_level="warning")
