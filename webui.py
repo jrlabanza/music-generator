@@ -386,6 +386,16 @@ class GenerateRequest(BaseModel):
     ode_steps: int | None = Field(default=None, ge=4, le=64)
 
 
+class LyricsRequest(BaseModel):
+    task: str = "continue"            # continue | write | rewrite
+    lyrics: str = ""
+    style: str = ""
+    title: str = ""
+    section: str | None = None
+    language: str | None = None
+    text: str | None = None           # section to rewrite
+
+
 class AbcToolRequest(BaseModel):
     action: str
     abc: str
@@ -589,6 +599,23 @@ def build_app(engine: Engine, password: str | None = None):
         return engine.submit(f"Transcribe {stem}", {"path": str(folder / name), "melody_only": melody_only,
                              "filename": name}, kind="transcribe").public()
 
+    @app.post("/api/lyrics")
+    def lyrics(body: LyricsRequest):
+        running, has_model, _ = ollama_status()
+        if not running:
+            raise HTTPException(501, "The local lyric model is not running: install Ollama (ollama.com) and start it, then try again.")
+        if not has_model:
+            raise HTTPException(501, f"The lyric model is not downloaded yet: run `ollama pull {LYRICS_MODEL}`.")
+        if body.task == "continue" and not body.lyrics.strip():
+            raise HTTPException(422, "There are no lyrics to continue from — write a first section, or use Write from title.")
+        if body.task == "write" and not (body.title.strip() or body.style.strip()):
+            raise HTTPException(422, "Give at least a title or a style to write lyrics from.")
+        with engine.lock:
+            gpu_free = engine.current is None
+        started = time.time()
+        text = write_lyrics(body.task, body.lyrics, body.style, body.title, body.section, body.language, body.text, gpu_free)
+        return {"text": text, "model": LYRICS_MODEL, "device": "gpu" if gpu_free else "cpu", "seconds": round(time.time() - started, 1)}
+
     @app.get("/api/doctor")
     def doctor():
         import platform
@@ -615,6 +642,7 @@ def build_app(engine: Engine, password: str | None = None):
                 "weights": getattr(engine.pipe, "weights", None),
                 "models": {name: folder(path) for name, path in (("YuE2-3B", MODELS / "YuE2-3B"), ("YuE2-Vae", MODELS / "YuE2-Vae"),
                            ("YuE2-Vae-legacy", LEGACY_VAE), ("SheetSage2", SHEETSAGE_MODEL), ("MERT-v2-FullSong", MODELS / "MERT-v2-FullSong"))},
+                "lyrics_model": dict(zip(("running", "downloaded", "models"), ollama_status()), name=LYRICS_MODEL),
                 "sheetsage2_env": SHEETSAGE_PY.is_file(), "ffmpeg": bool(shutil.which("ffmpeg")) or (HERE / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe").is_file(),
                 "cloudflared": str(find_cloudflared() or ""), "share_urls": getattr(engine, "share_urls", []),
                 "disk_free_gb": round(shutil.disk_usage(str(HERE)).free / 2**30, 1),
@@ -727,6 +755,88 @@ def main():
     elif args.host == "0.0.0.0":
         print("  No password set: anyone who can reach this address can use it (--password to require one)\n", file=sys.stderr)
     uvicorn.run(build_app(engine, args.password), host=args.host, port=args.port, log_level="warning")
+
+
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+LYRICS_MODEL = os.environ.get("MUSICGEN_LYRICS_MODEL", "qwen2.5:7b")
+LYRICIST_SYSTEM = (
+    "You are a professional lyricist who writes singable lyrics with clear rhyme, steady line lengths and a story "
+    "that moves forward. Always keep the language of the existing lyrics exactly (Tagalog stays Tagalog, English "
+    "stays English, a mix stays a mix) and keep the same voice and tone. Output only lyrics: each section starts "
+    "with its tag in square brackets on its own line, such as [Verse], [Chorus], [Bridge] or [Outro], followed by "
+    "the lines. No title, no explanations, no quotation marks, no markdown."
+)
+
+
+def ollama_status():
+    """(running, has_model, models) for the local lyric model."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=3) as response:
+            models = [m.get("name", "") for m in json.loads(response.read()).get("models", [])]
+    except Exception:
+        return False, False, []
+    wanted = LYRICS_MODEL if ":" in LYRICS_MODEL else LYRICS_MODEL + ":latest"
+    return True, any(m == wanted or m == LYRICS_MODEL for m in models), models
+
+
+def clean_lyrics(text, default_tag):
+    lines = [l.rstrip() for l in text.replace("\r", "").split("\n")]
+    lines = [l for l in lines if not l.strip().startswith("```")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    # drop chatter before the first section tag ("Here is the next verse:")
+    first_tag = next((i for i, l in enumerate(lines) if l.strip().startswith("[") and l.strip().endswith("]")), None)
+    if first_tag is not None:
+        lines = lines[first_tag:]
+    elif lines and lines[0].strip().endswith(":") and len(lines) > 1:
+        lines = lines[1:]
+    if not lines or not lines[0].strip().startswith("["):
+        lines.insert(0, f"[{default_tag}]")
+    out, blank = [], 0
+    for line in lines:
+        blank = blank + 1 if not line.strip() else 0
+        if blank <= 1:
+            out.append(line.strip("\"“” "))
+    return "\n".join(out).strip()[:4000]
+
+
+def write_lyrics(task, lyrics="", style="", title="", section=None, language=None, text=None, gpu_free=True):
+    """Ask the local Ollama model for lyrics; returns cleaned text."""
+    import urllib.request
+    context = [f"Title: {title}" if title else "", f"Style: {style}" if style else "", f"Language: {language}" if language else ""]
+    context = "\n".join(c for c in context if c)
+    if task == "continue":
+        want = f"the next section: {section}" if section else "the next section (choose what should come next: another verse, the chorus, a pre-chorus, a bridge or an outro)"
+        user = (f"{context}\n\nLyrics so far:\n{lyrics.strip()}\n\nWrite ONLY {want}, 4 to 8 lines, matching the rhyme scheme, "
+                "syllable feel and story of the lyrics so far. Start with its section tag.")
+        default_tag = section or "Verse"
+    elif task == "write":
+        user = (f"{context}\n\nWrite complete song lyrics with this structure: [Verse], [Chorus], [Verse], [Chorus], [Bridge], [Chorus]. "
+                "Four lines per section; the chorus repeats with the same words each time. Infer the language from the title and "
+                "style when none is given (default English).")
+        default_tag = "Verse"
+    elif task == "rewrite":
+        user = (f"{context}\n\nRewrite this section, keeping its meaning, language and line count but improving the rhyme and flow:\n"
+                f"{(text or '').strip()}\n\nOutput only the rewritten section with its tag.")
+        default_tag = section or "Verse"
+    else:
+        raise HTTPException(422, "task must be continue, write or rewrite")
+    body = {"model": LYRICS_MODEL, "stream": False, "keep_alive": 0,
+            "messages": [{"role": "system", "content": LYRICIST_SYSTEM}, {"role": "user", "content": user}],
+            "options": {"temperature": 0.85, "top_p": 0.9, "repeat_penalty": 1.1, "num_predict": 450,
+                        "num_gpu": 999 if gpu_free else 0}}
+    request = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=240) as response:
+            reply = json.loads(response.read())
+    except Exception as exc:
+        raise HTTPException(502, f"The lyric model did not answer: {exc}")
+    content = (reply.get("message") or {}).get("content", "")
+    if not content.strip():
+        raise HTTPException(502, "The lyric model returned nothing")
+    return clean_lyrics(content, default_tag)
 
 
 def run_abc_tool(body):

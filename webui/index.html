@@ -49,6 +49,13 @@
         <textarea id="lyrics" rows="12" placeholder="[Verse]&#10;Neon fades along the lane&#10;…&#10;&#10;[Chorus]&#10;Let the day come into view&#10;…" required></textarea>
         <span class="hint">Use section tags like <code>[Verse]</code>, <code>[Chorus]</code>, <code>[Bridge]</code>. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> generates.</span>
       </label>
+      <div class="tools lyric-tools">
+        <button class="btn-mini" id="btn-lyrics-continue" type="button" title="Write the next section with the local lyric model">Continue lyrics ✎</button>
+        <select id="lyrics-section" title="Which section comes next"><option value="">next: auto</option><option>Verse</option><option>Pre-Chorus</option><option>Chorus</option><option>Bridge</option><option>Outro</option></select>
+        <button class="btn-mini" id="btn-lyrics-write" type="button" title="Write complete lyrics from the title and style">Write from title</button>
+        <button class="btn-link" id="btn-lyrics-undo" type="button" hidden>undo</button>
+        <span class="hint" id="lyrics-hint"></span>
+      </div>
 
       <div class="row three">
         <label class="field">

@@ -108,6 +108,34 @@
   async function loadExamples() { return state.examples || (state.examples = await api("/api/examples")); }
   el.lyrics.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); el.form.requestSubmit(); } });
 
+  // ── lyric writing (local Ollama model) ───────────────────────────────
+  const lyricButtons = [$("btn-lyrics-continue"), $("btn-lyrics-write")];
+  function lyricHint(text) { $("lyrics-hint").textContent = text; }
+  async function askLyrics(task) {
+    const body = { task, lyrics: el.lyrics.value.trim(), style: el.style.value.trim(), title: el.title.value.trim(), section: $("lyrics-section").value || null };
+    if (task === "continue" && !body.lyrics) return lyricHint("Write a first section (or use Write from title) before continuing.");
+    if (task === "write" && !body.title && !body.style) return lyricHint("Give a title or a style first.");
+    if (task === "write" && body.lyrics && !confirm("Replace the current lyrics with newly written ones? (undo is available)")) return;
+    lyricButtons.forEach((b) => (b.disabled = true));
+    lyricHint(task === "continue" ? "Writing the next section…" : "Writing lyrics…");
+    try {
+      const reply = await post("/api/lyrics", body);
+      state.lyricsUndo = el.lyrics.value;
+      el.lyrics.value = task === "continue" ? `${el.lyrics.value.trimEnd()}\n\n${reply.text}` : reply.text;
+      saveDraft();
+      $("btn-lyrics-undo").hidden = false;
+      lyricHint(`Written by ${reply.model} on the ${reply.device} in ${reply.seconds}s — read it over, the model can mishear the rhythm.`);
+      el.lyrics.scrollTop = el.lyrics.scrollHeight;
+    } catch (error) { lyricHint(error.message); }
+    finally { lyricButtons.forEach((b) => (b.disabled = false)); }
+  }
+  $("btn-lyrics-continue").addEventListener("click", () => askLyrics("continue"));
+  $("btn-lyrics-write").addEventListener("click", () => askLyrics("write"));
+  $("btn-lyrics-undo").addEventListener("click", () => {
+    if (state.lyricsUndo == null) return;
+    el.lyrics.value = state.lyricsUndo; state.lyricsUndo = null; $("btn-lyrics-undo").hidden = true; saveDraft(); lyricHint("Restored.");
+  });
+
   function validate(body) {
     if (!body.style || !body.lyrics) return "Style and lyrics are both required.";
     if (body.abc && body.cot === "off") return "A supplied score needs the “Melody + chords” or “Melody only” plan mode.";
@@ -615,6 +643,7 @@
       ["Software", `Python ${d.python} · torch ${d.versions.torch} · CUDA ${d.cuda} · cuDNN ${d.cudnn} · transformers ${d.versions.transformers} · yue2-infer ${d.versions["yue2-infer"]}`],
       ...Object.entries(d.models).map(([name, m]) => [name, m.present ? `${m.size_gb} GB · ${m.path}` : `not downloaded (${m.path})`]),
       ["Cover feature", d.sheetsage2_env && d.models.SheetSage2.present ? "SheetSage2 ready" + (d.ffmpeg ? " · ffmpeg found" : " · no ffmpeg (wav/flac/mp3/ogg still work)") : "SheetSage2 not set up"],
+      ["Lyric model", !d.lyrics_model.running ? "Ollama not running" : d.lyrics_model.downloaded ? `${d.lyrics_model.name} ready (Ollama)` : `Ollama running, ${d.lyrics_model.name} not downloaded`],
       ["Sharing", (d.cloudflared ? `cloudflared: ${d.cloudflared}` : "cloudflared not found") + (d.share_urls.length ? ` · ${d.share_urls.join(", ")}` : "")],
       ["Storage", `${d.disk_free_gb} GB free · ${d.songs} songs · ${d.plans} plans · ${d.trash} in trash`],
       ["Weights", d.weights ? Object.entries(d.weights).map(([k, v]) => `${k}: ${(v.files && Object.values(v.files)[0] && Object.values(v.files)[0].sha256 || "").slice(0, 12)}…`).join(" · ") : "—"],

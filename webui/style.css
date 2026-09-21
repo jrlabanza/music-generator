@@ -242,3 +242,6 @@ input[type="file"] { width: 100%; font-size: 12.5px; color: var(--muted); margin
 .doctor dt { color: var(--muted); font-weight: 600; }
 .doctor dd { margin: 0; word-break: break-word; }
 @media (max-width: 720px) { .row.three { grid-template-columns: 1fr 1fr; } .sampling-grid { grid-template-columns: 44px repeat(5, 1fr); } }
+
+.lyric-tools { margin: -8px 0 14px; }
+.lyric-tools select { width: auto; padding: 4px 6px; font-size: 12px; }
