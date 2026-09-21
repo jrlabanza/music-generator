@@ -87,6 +87,7 @@
           <span class="tool-group"><button class="btn-mini" type="button" data-tool="transpose" data-semitones="-1">−1</button><input id="semitones" type="number" value="2" min="-24" max="24" title="semitones"><button class="btn-mini" type="button" data-tool="transpose" data-semitones="+">+n</button><button class="btn-mini" type="button" data-tool="transpose" data-semitones="1">+1</button></span>
           <span class="tool-group"><input id="bpm" type="number" min="20" max="300" placeholder="BPM" title="new tempo"><button class="btn-mini" type="button" data-tool="tempo">Set tempo</button></span>
           <button class="btn-mini" type="button" id="btn-sections" title="Reorder, repeat, delete or shorten sections">Sections…</button>
+          <button class="btn-mini" type="button" id="btn-tags" title="Write instrumental section tags into the lyrics box from this score's sections">Tags from score</button>
           <button class="btn-mini" type="button" data-tool="inspect" title="Validate the score and summarise it">Check</button>
           <button class="btn-mini" type="button" data-tool="compare" title="Compare with the score this was loaded from">Compare with source</button>
           <button class="btn-link" type="button" id="btn-clear-abc">clear</button>
@@ -126,6 +127,7 @@
           <label class="check"><input id="cover-melody" type="checkbox" checked> melody only (chord-free)</label>
           <button class="btn-ghost" id="btn-transcribe" type="button">Transcribe</button>
         </div>
+        <label class="check" style="margin-bottom:10px"><input id="cover-instrumental" type="checkbox" checked> instrumental cover: fill the lyrics with section tags from the score (no words needed)</label>
         <p class="hint" id="cover-hint"></p>
       </details>
 

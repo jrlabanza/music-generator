@@ -213,6 +213,17 @@
     const total = sections.reduce((n, s) => n + barsOf(s), 0);
     $("sections-total").textContent = `${total} bars · about ${fmtTime(total * spb)}`;
   }
+  function tagsFromScore(abc) {
+    const parsed = parseSections(abc);
+    if (!parsed || !parsed.sections.length) return null;
+    return parsed.sections.map((s) => `[${s.name.charAt(0).toUpperCase() + s.name.slice(1)} - instrumental, no vocals]`).join("\n\n");
+  }
+  $("btn-tags").addEventListener("click", () => {
+    const tags = tagsFromScore(el.abc.value);
+    if (!tags) return showInfo("No '% section' markers found in this score.");
+    fillForm({ lyrics: tags });
+    showInfo("Lyrics box filled with instrumental section tags — set a style and Generate for an instrumental version of this score.");
+  });
   $("btn-sections").addEventListener("click", () => {
     const parsed = parseSections(el.abc.value);
     if (!parsed || !parsed.sections.length) return showInfo("No '% section' markers found in this score.");
@@ -399,9 +410,13 @@
   function applyTranscription(job) {
     state.scoreSource = null;
     fillForm({ abc: job.result.abc, cot: job.result.melody_only ? "melody" : "full" });
+    if ($("cover-instrumental").checked) {
+      const tags = tagsFromScore(job.result.abc);
+      if (tags) fillForm({ lyrics: tags, title: el.title.value.trim() || `${(job.request.filename || "cover").replace(/\.[^.]+$/, "")} (cover)` });
+    }
     const warnings = job.result.warnings || [];
     el.coverHint.textContent = `Transcribed ${job.request.filename || "the recording"}${job.result.seconds ? ` (${fmtTime(job.result.seconds)})` : ""} in ${fmtTime(job.result.total_seconds)}. ` +
-      (warnings.length ? `Warnings: ${warnings.join("; ")}. ` : "") + "Now add lyrics and a style, then Generate.";
+      (warnings.length ? `Warnings: ${warnings.join("; ")}. ` : "") + ($("cover-instrumental").checked ? "Lyrics filled with instrumental tags — set a style and Generate." : "Now add lyrics and a style, then Generate.");
     el.cover.open = true; el.advanced.open = true;
     el.abc.scrollIntoView({ behavior: "smooth", block: "center" });
   }
