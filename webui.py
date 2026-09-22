@@ -49,6 +49,30 @@ LEGACY_VAE = MODELS / "YuE2-Vae-legacy"
 SHEETSAGE_PY = HERE / ".venv-sheetsage2" / "Scripts" / "python.exe"
 SHEETSAGE_MODEL = MODELS / "SheetSage2"
 MAX_UPLOAD_BYTES = 200 * 2**20
+VOICES = HERE / "voices"                # reference recordings for voice conversion (personal; never in git)
+VOICE_PY = HERE / ".venv-voice" / "Scripts" / "python.exe"
+SEEDVC_DIR = HERE / "tools" / "seed-vc"
+VOICE_SUFFIXES = {".wav", ".flac", ".mp3", ".ogg"}
+
+
+def voice_files():
+    """Reference voices on disk: [{name, file, seconds}]."""
+    import soundfile as sf
+    if not VOICES.is_dir():
+        return []
+    out = []
+    for f in sorted(VOICES.iterdir()):
+        if f.is_file() and f.suffix.lower() in VOICE_SUFFIXES:
+            try:
+                seconds = round(sf.info(str(f)).duration, 1)
+            except Exception:
+                seconds = None
+            out.append({"name": f.stem, "file": f.name, "seconds": seconds})
+    return out
+
+
+def voice_ready():
+    return VOICE_PY.is_file() and (SEEDVC_DIR / "inference.py").is_file()
 TOKENS_PER_SECOND = 25            # semantic tokens per second of audio (25 Hz latents)
 mimetypes.add_type("audio/flac", ".flac")
 
@@ -146,7 +170,7 @@ class Engine:
             traceback.print_exc()
             return
         work = {"song": self._work_song, "plan": self._work_plan, "decode": self._work_decode,
-                "transcribe": self._work_transcribe}
+                "transcribe": self._work_transcribe, "voice": self._work_voice}
         while True:
             job = self.queue.get()
             if job.cancel_requested:
@@ -218,11 +242,8 @@ class Engine:
         sf.write(OUTPUTS / song_id / name, audio, 48000, subtype="PCM_24")
         return {"song_id": song_id, "audio": f"/outputs/{song_id}/{name}", "seconds": len(audio) / 48000}
 
-    def _work_transcribe(self, job):
-        out = TRANSCRIPTIONS / job.id
-        command = [str(SHEETSAGE_PY), "-X", "utf8", str(HERE / "sheetsage_transcribe.py"), job.request["path"], "--output", str(out)]
-        if not job.request.get("melody_only", True):
-            command.append("--full")
+    def _run_tool(self, job, command, label):
+        """Run a helper script in another environment; it prints one 'RESULT {json}' line."""
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                    encoding="utf-8", errors="replace", cwd=str(HERE))
         lines = []
@@ -230,13 +251,29 @@ class Engine:
             lines.append(line.rstrip())
             if job.cancel_requested:
                 process.terminate()
-                raise InterruptedError("Transcription cancelled")
+                raise InterruptedError(f"{label} cancelled")
         process.wait()
         result = next((json.loads(l[7:]) for l in lines if l.startswith("RESULT ")), None)
         if process.returncode or result is None:
-            tail = "\n".join(l for l in lines[-12:] if l.strip())
-            raise RuntimeError("SheetSage2 failed:\n" + tail[-1500:])
-        return {"transcription_id": job.id, **result}
+            tail = "\n".join(l for l in lines[-15:] if l.strip())
+            raise RuntimeError(f"{label} failed:\n" + tail[-1500:])
+        return result
+
+    def _work_transcribe(self, job):
+        out = TRANSCRIPTIONS / job.id
+        command = [str(SHEETSAGE_PY), "-X", "utf8", str(HERE / "sheetsage_transcribe.py"), job.request["path"], "--output", str(out)]
+        if not job.request.get("melody_only", True):
+            command.append("--full")
+        return {"transcription_id": job.id, **self._run_tool(job, command, "SheetSage2")}
+
+    def _work_voice(self, job):
+        song_id = job.request["song_id"]
+        command = [str(VOICE_PY), "-X", "utf8", str(HERE / "voice_convert.py"),
+                   "--song", str(OUTPUTS / song_id / "audio.flac"), "--reference", str(VOICES / job.request["reference"]),
+                   "--name", job.request["voice"], "--output", str(OUTPUTS / song_id),
+                   "--semitones", str(job.request.get("semitones", 0)), "--steps", str(job.request.get("steps", 30))]
+        result = self._run_tool(job, command, "Voice conversion")
+        return {**result, "song_id": song_id, "audio": f"/outputs/{song_id}/{result['audio']}"}
 
     def _release_gpu(self):
         """Park the transformer in RAM between jobs so the card is free for other apps."""
@@ -250,8 +287,8 @@ class Engine:
 
     # public API -------------------------------------------------------------
     def submit(self, title, request, kind="song", options=None):
-        base = {"song": OUTPUTS, "plan": PLANS, "decode": OUTPUTS, "transcribe": TRANSCRIPTIONS}[kind]
-        job_id = unique_id(title, base) if kind != "decode" else f"decode-{request['song_id']}-{int(time.time())}"
+        base = {"song": OUTPUTS, "plan": PLANS, "decode": OUTPUTS, "transcribe": TRANSCRIPTIONS, "voice": OUTPUTS}[kind]
+        job_id = unique_id(title, base) if kind not in ("decode", "voice") else f"{kind}-{request['song_id']}-{int(time.time())}"
         job = Job(id=job_id, title=title, request=request, kind=kind, options=options or {})
         self.jobs[job.id] = job
         self.queue.put(job)
@@ -394,6 +431,12 @@ class LyricsRequest(BaseModel):
     section: str | None = None
     language: str | None = None
     text: str | None = None           # section to rewrite
+
+
+class VoiceRequest(BaseModel):
+    voice: str
+    semitones: int = Field(default=0, ge=-12, le=12)
+    steps: int = Field(default=30, ge=10, le=60)
 
 
 class AbcToolRequest(BaseModel):
@@ -550,7 +593,10 @@ def build_app(engine: Engine, password: str | None = None):
         return {**summary, "request": request, "timing": result.get("timing"),
                 "score": score, "audio_url": f"/outputs/{song_id}/audio.flac",
                 "alt_audio": f"/outputs/{song_id}/audio-legacy.flac" if (directory / "audio-legacy.flac").is_file() else None,
-                "has_latent": (directory / "latent.npy").is_file(), "legacy_vae_available": LEGACY_VAE.is_dir()}
+                "has_latent": (directory / "latent.npy").is_file(), "legacy_vae_available": LEGACY_VAE.is_dir(),
+                "voice_versions": [{"name": f.stem[len("audio-voice-"):], "url": f"/outputs/{song_id}/{f.name}",
+                                    "modified": f.stat().st_mtime} for f in sorted(directory.glob("audio-voice-*.flac"))],
+                "voice_ready": voice_ready()}
 
     @app.get("/api/plans/{plan_id}")
     def plan_detail(plan_id: str):
@@ -616,6 +662,66 @@ def build_app(engine: Engine, password: str | None = None):
         text = write_lyrics(body.task, body.lyrics, body.style, body.title, body.section, body.language, body.text, gpu_free)
         return {"text": text, "model": LYRICS_MODEL, "device": "gpu" if gpu_free else "cpu", "seconds": round(time.time() - started, 1)}
 
+    # ── voices (sing a song in your own voice) ─────────────────────────────
+    @app.get("/api/voices")
+    def voices():
+        return {"voices": voice_files(), "ready": voice_ready()}
+
+    @app.post("/api/voices")
+    async def add_voice(file: UploadFile = File(...), name: str = Form("")):
+        import soundfile as sf
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in VOICE_SUFFIXES:
+            raise HTTPException(422, "Upload a wav, flac, mp3 or ogg recording.")
+        data = await file.read()
+        if not data:
+            raise HTTPException(422, "The file is empty.")
+        if len(data) > 50 * 2**20:
+            raise HTTPException(413, "Keep voice clips under 50 MB (a 30-60 s recording is ideal).")
+        voice = slugify(name.strip() or Path(file.filename).stem, "voice")
+        VOICES.mkdir(parents=True, exist_ok=True)
+        target = VOICES / f"{voice}{suffix}"
+        for old in VOICES.glob(f"{voice}.*"):          # replacing a voice keeps one file per name
+            old.unlink()
+        target.write_bytes(data)
+        try:
+            seconds = sf.info(str(target)).duration
+        except Exception as error:
+            target.unlink(missing_ok=True)
+            raise HTTPException(422, f"Could not read that audio file: {error}")
+        if seconds < 5:
+            target.unlink(missing_ok=True)
+            raise HTTPException(422, "That clip is too short — record at least 20 s of singing or speaking.")
+        if seconds > 180:
+            target.unlink(missing_ok=True)
+            raise HTTPException(422, "Keep the clip under 3 minutes; 30-60 s of clean audio works best.")
+        return {"voice": {"name": voice, "file": target.name, "seconds": round(seconds, 1)}, "voices": voice_files()}
+
+    @app.delete("/api/voices/{name}")
+    def delete_voice(name: str):
+        matches = [v for v in voice_files() if v["name"] == name]
+        if not matches:
+            raise HTTPException(404, "Unknown voice")
+        for v in matches:
+            (VOICES / v["file"]).unlink(missing_ok=True)
+        return {"deleted": name, "voices": voice_files()}
+
+    @app.post("/api/songs/{song_id}/voice")
+    def sing_in_voice(song_id: str, body: VoiceRequest):
+        ready()
+        if not voice_ready():
+            raise HTTPException(501, "Voice conversion is not set up on this PC (see README: Sing it in your voice).")
+        directory = OUTPUTS / song_id
+        if not re.fullmatch(ID_RE, song_id) or not (directory / "audio.flac").is_file():
+            raise HTTPException(404, "Unknown song")
+        reference = next((v for v in voice_files() if v["name"] == body.voice), None)
+        if reference is None:
+            raise HTTPException(404, "Unknown voice — upload a reference clip first.")
+        title = (read_json(directory / "request.json") or {}).get("title") or song_id
+        return engine.submit(f"{title} (in {body.voice}'s voice)",
+                             {"song_id": song_id, "voice": body.voice, "reference": reference["file"],
+                              "semitones": body.semitones, "steps": body.steps}, kind="voice").public()
+
     @app.get("/api/doctor")
     def doctor():
         import platform
@@ -643,6 +749,7 @@ def build_app(engine: Engine, password: str | None = None):
                 "models": {name: folder(path) for name, path in (("YuE2-3B", MODELS / "YuE2-3B"), ("YuE2-Vae", MODELS / "YuE2-Vae"),
                            ("YuE2-Vae-legacy", LEGACY_VAE), ("SheetSage2", SHEETSAGE_MODEL), ("MERT-v2-FullSong", MODELS / "MERT-v2-FullSong"))},
                 "lyrics_model": dict(zip(("running", "downloaded", "models"), ollama_status()), name=LYRICS_MODEL),
+                "voice_conversion": {"env": VOICE_PY.is_file(), "seed_vc": (SEEDVC_DIR / "inference.py").is_file(), "voices": len(voice_files())},
                 "sheetsage2_env": SHEETSAGE_PY.is_file(), "ffmpeg": bool(shutil.which("ffmpeg")) or (HERE / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe").is_file(),
                 "cloudflared": str(find_cloudflared() or ""), "share_urls": getattr(engine, "share_urls", []),
                 "disk_free_gb": round(shutil.disk_usage(str(HERE)).free / 2**30, 1),

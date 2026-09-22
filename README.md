@@ -55,7 +55,8 @@ The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model 
 - **Re-decode (legacy)** — re-render a song's saved latents through the benchmark decoder `YuE2-Vae-legacy` in a few seconds for a second listening version.
 - **New take / Same score, new style** — one-click variations of any song in the Library.
 - **Lyric writing** (buttons under the Lyrics box) — *Continue lyrics* writes the next section in the same language, rhyme scheme and story (pick which section, or let it choose); *Write from title* drafts complete lyrics from the title and style; *undo* restores. Runs on a **local** model through [Ollama](https://ollama.com) (`qwen2.5:7b` by default, `MUSICGEN_LYRICS_MODEL` to change): install Ollama, run `ollama pull qwen2.5:7b`, and the buttons work — on the GPU when no song is generating, on the CPU otherwise, never holding VRAM between requests. Read the output over before generating; it's a 7B model.
-- **System** (header pill) — versions, GPU, model files and their hashes, storage, whether the cover feature is ready, and whether the lyric model is available.
+- **Sing it in your voice** (on any finished song) — upload a 30–60 s clip of yourself singing (*Voices…*), pick it, press *Sing it in this voice*: Demucs lifts the vocal off the song, [Seed-VC](https://github.com/Plachtaa/seed-vc)'s zero-shot singing model re-sings it with your timbre (pitch-shift it a few semitones if the song sits outside your range), and the new vocal is mixed back over the original backing. Each version appears under the player and stays in the song's folder (`audio-voice-<name>.flac`). YuE2 itself has no voice cloning — this is post-processing, so the melody, words and backing are unchanged; only the voice is yours. Requires the voice environment (below).
+- **System** (header pill) — versions, GPU, model files and their hashes, storage, whether the cover feature, the lyric model and voice conversion are ready.
 - **Library** — every song in `outputs/`, newest first. Each folder keeps `audio.flac`, `score.abc`, `plan.json`, `semantic.npy`, `latent.npy`, `request.json`, `result.json`. *Delete* moves a song's folder to `trash/` (restore by moving it back into `outputs/`; empty `trash/` by hand to reclaim disk). It works while the song is loaded in players — files are served from memory so the server never pins them — and if some other program holds a file open, the song is hidden at once and moved as soon as the file is released.
 
 Flags: `--vram low|normal|auto` (see below), `--share` to let other devices on your network use it (below), `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
@@ -105,6 +106,23 @@ YuE\.venv\Scripts\python.exe download_models.py --sheetsage2 --legacy-vae
 ```
 
 `download_models.py --sheetsage2` fetches `m-a-p/SheetSage2` and its `MERT-v2-FullSong` encoder into `models/` and points the SheetSage2 config at the local encoder. `sheetsage_transcribe.py` decodes uploads with `soundfile` (wav, flac, mp3, ogg); other containers need FFmpeg on PATH. Transcription runs on the GPU between generations (the two never overlap) and takes about a minute for a 3-minute song.
+
+### Sing it in your voice (Seed-VC)
+
+Voice conversion runs in its own environment too (Seed-VC pins older `transformers`/`numpy`). One-time setup; the Seed-VC checkpoints (~1.5 GB: the singing model, RMVPE pitch tracker, CAMPPlus speaker encoder, BigVGAN vocoder, Whisper) and Demucs download from Hugging Face on the first conversion:
+
+```powershell
+py -3.11 -m venv .venv-voice
+.venv-voice\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+.venv-voice\Scripts\python.exe -m pip install scipy==1.13.1 librosa==0.10.2 "huggingface-hub>=0.28.1" munch==4.0.0 einops==0.8.0 descript-audio-codec==1.0.0 pydub==0.25.1 transformers==4.46.3 soundfile numpy==1.26.4 hydra-core==1.3.2 pyyaml python-dotenv demucs
+git clone https://github.com/Plachtaa/seed-vc tools\seed-vc
+```
+
+Then in the app open *Voices…* on any song and add a recording of yourself: 30–60 s, singing (speaking works, singing works better), alone, in a quiet room, no backing track, no reverb — the model copies whatever it hears. Clips live in `voices/` (gitignored; they never leave the PC). `voice_convert.py` does the work: Demucs `htdemucs` separates the song (stems are cached in the song's `stems/` folder, so trying a second voice skips that step), Seed-VC's f0-conditioned model (`DiT … f0_44k … v2`, 30 diffusion steps) converts the vocal at 44.1 kHz, then it is level-matched to the original vocal, mixed over the accompaniment and written next to `audio.flac`. Roughly real time on an RTX 4060 (a one-minute song takes one to two minutes; the first run also downloads the checkpoints); the GPU is shared with generation, so conversions queue behind songs.
+
+```powershell
+.venv-voice\Scripts\python.exe voice_convert.py --song outputs\first-song\audio.flac --reference voices\me.wav --name me --output outputs\first-song --semitones -2
+```
 
 ## Command line
 

@@ -19,6 +19,10 @@
     scoreBlock: $("score-block"), sheet: $("sheet"), abcText: $("abc-text"),
     compare: $("compare"), compareGrid: $("compare-grid"), compareClose: $("btn-compare-close"), compareBtn: $("btn-compare"),
     songs: $("songs"), libraryEmpty: $("library-empty"), libraryCount: $("library-count"),
+    voiceBlock: $("voice-block"), voiceSelect: $("voice-select"), voiceSemitones: $("voice-semitones"), voiceBtn: $("btn-voice"),
+    voicesManage: $("btn-voices-manage"), voiceHint: $("voice-hint"), voiceVersions: $("voice-versions"),
+    voicesOverlay: $("voices-overlay"), voicesClose: $("voices-close"), voiceName: $("voice-name"), voiceFile: $("voice-file"),
+    voiceUpload: $("voice-upload"), voicesHint: $("voices-hint"), voicesList: $("voices-list"),
   };
   const TOKENS_PER_SECOND = 25;
   const STAGE_STEPS = [
@@ -29,7 +33,8 @@
     [/^(Loading audio decoder|Decoding audio)/, 4],
   ];
   const state = { watching: new Set(), lastStep: 0, selected: null, song: null, songs: [], examples: null, timer: null,
-                  online: true, status: null, plan: null, scoreSource: null, compare: new Set(), sections: null };
+                  online: true, status: null, plan: null, scoreSource: null, compare: new Set(), sections: null,
+                  voices: null, voiceReady: false };
 
   // ── helpers ────────────────────────────────────────────────────────────
   async function api(path, options) {
@@ -363,7 +368,7 @@
           if (/^Generating song/.test(stage.label)) stats.push(`≈ <b>${fmtTime(stage.completed / TOKENS_PER_SECOND)}</b> of audio so far`);
         } else stats.push(stage.label);
         stats.push(`${fmtTime(stage.elapsed)} in this step`);
-      } else stats.push(kind === "transcribe" ? "SheetSage2 is listening…" : "Switching stages…");
+      } else stats.push(kind === "transcribe" ? "SheetSage2 is listening…" : kind === "voice" ? "Splitting the vocal off and re-singing it (about a minute)…" : "Switching stages…");
       el.stats.innerHTML = stats.join("<span class='sep'> · </span>");
       el.progress.classList.toggle("indeterminate", fraction == null);
       el.bar.style.width = fraction == null ? "" : `${Math.max(2, fraction * 100)}%`;
@@ -402,6 +407,7 @@
         else if (job.kind === "plan") showPlan(job);
         else if (job.kind === "decode") { await openSong(job.result.song_id); }
         else if (job.kind === "transcribe") applyTranscription(job);
+        else if (job.kind === "voice") { await openSong(job.result.song_id, { scroll: false }); el.voiceHint.hidden = true; }
       } else if (job.state === "failed") {
         if (job.kind === "transcribe") el.coverHint.textContent = job.error || "Transcription failed.";
         else showResultError(job.title, job.error || `${job.kind} failed.`);
@@ -487,6 +493,7 @@
     el.redecode.textContent = song.alt_audio ? "Re-decode again (legacy)" : "Re-decode (legacy)";
     renderSheet(el.sheet, el.abcText, song.score, "result");
     el.scoreBlock.hidden = !song.score;
+    renderVoiceBlock(song);
     renderLibrary();
     if (scroll) el.result.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
@@ -547,7 +554,7 @@
     if (!song) return;
     if (!confirm(`Delete "${song.title}"?\n\nIt moves to the trash folder on the PC (trash\\${song.id}), so it can be restored by hand.`)) return;
     // release every player that may hold a suspended download of this song's files
-    for (const audio of [el.player, el.altPlayer, ...el.compareGrid.querySelectorAll("audio")]) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+    for (const audio of [el.player, el.altPlayer, ...el.voiceVersions.querySelectorAll("audio"), ...el.compareGrid.querySelectorAll("audio")]) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
     el.del.disabled = true;
     try {
       const reply = await api(`/api/songs/${song.id}`, { method: "DELETE" });
@@ -560,6 +567,95 @@
       alert(error.message);
       openSong(song.id, { scroll: false }).catch(() => {});
     } finally { el.del.disabled = false; }
+  });
+
+  // ── sing it in my voice ───────────────────────────────────────────────
+  for (let s = 12; s >= -12; s--) {
+    const option = document.createElement("option");
+    option.value = s; option.textContent = s === 0 ? "same pitch" : (s > 0 ? `+${s}` : `${s}`) + (Math.abs(s) === 12 ? " (octave)" : "");
+    el.voiceSemitones.appendChild(option);
+  }
+  el.voiceSemitones.value = "0";
+  async function loadVoices() {
+    try {
+      const reply = await api("/api/voices");
+      state.voices = reply.voices; state.voiceReady = reply.ready;
+    } catch { state.voices = state.voices || []; }
+    const current = el.voiceSelect.value;
+    el.voiceSelect.innerHTML = "";
+    for (const voice of state.voices) {
+      const option = document.createElement("option");
+      option.value = voice.name; option.textContent = voice.seconds ? `${voice.name} (${fmtTime(voice.seconds)})` : voice.name;
+      el.voiceSelect.appendChild(option);
+    }
+    if (!state.voices.length) { const option = document.createElement("option"); option.value = ""; option.textContent = "no voices yet"; el.voiceSelect.appendChild(option); }
+    else if ([...el.voiceSelect.options].some((o) => o.value === current)) el.voiceSelect.value = current;
+    el.voiceSelect.disabled = el.voiceBtn.disabled = !state.voices.length || !state.voiceReady;
+    renderVoicesList();
+    return state.voices;
+  }
+  function renderVoiceBlock(song) {
+    el.voiceHint.hidden = true;
+    el.voiceBlock.hidden = !(song.voice_ready || (song.voice_versions || []).length);
+    el.voiceVersions.innerHTML = "";
+    for (const version of song.voice_versions || []) {
+      const block = document.createElement("div");
+      block.className = "alt";
+      block.innerHTML = `<div class="sub"><span>In <b></b>'s voice</span><a class="btn-mini" download>Download</a></div><audio controls preload="metadata"></audio>`;
+      block.querySelector("b").textContent = version.name;
+      const link = block.querySelector("a"); link.href = version.url; link.download = `${song.id}-voice-${version.name}.flac`;
+      block.querySelector("audio").src = `${version.url}?t=${Math.round(version.modified || 0)}`;
+      el.voiceVersions.appendChild(block);
+    }
+    if (song.voice_ready && state.voices === null) loadVoices().catch(() => {});
+  }
+  el.voiceBtn.addEventListener("click", async () => {
+    const song = state.song, voice = el.voiceSelect.value;
+    if (!song || !voice) return;
+    el.voiceBtn.disabled = true;
+    el.voiceHint.hidden = false; el.voiceHint.textContent = "Queued…";
+    try {
+      const job = await post(`/api/songs/${song.id}/voice`, { voice, semitones: Number(el.voiceSemitones.value) || 0, steps: 30 });
+      state.watching.add(job.id);
+      el.voiceHint.textContent = `Working — "${job.title}" appears below this player when done (about a minute; the first run downloads the models).`;
+      el.now.hidden = false; el.nowTitle.textContent = job.title; el.nowSub.textContent = "Queued"; renderSteps(-1);
+      poll();
+    } catch (error) { el.voiceHint.textContent = error.message; }
+    finally { el.voiceBtn.disabled = !state.voices || !state.voices.length; }
+  });
+  function renderVoicesList() {
+    el.voicesList.innerHTML = "";
+    if (!state.voiceReady) el.voicesHint.textContent = "Voice conversion is not set up on this PC — see README: Sing it in your voice.";
+    else el.voicesHint.textContent = state.voices.length ? "" : "No voices yet. Add a clip to get started.";
+    for (const voice of state.voices || []) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="name"></span><span class="grow"></span><button class="btn-mini" type="button">Remove</button>`;
+      li.querySelector(".name").textContent = voice.name;
+      li.querySelector(".grow").textContent = `${voice.file}${voice.seconds ? ` · ${fmtTime(voice.seconds)}` : ""}`;
+      li.querySelector("button").addEventListener("click", async () => {
+        if (!confirm(`Remove the voice "${voice.name}"? Songs already sung in it keep their audio.`)) return;
+        try { await api(`/api/voices/${encodeURIComponent(voice.name)}`, { method: "DELETE" }); await loadVoices(); }
+        catch (error) { el.voicesHint.textContent = error.message; }
+      });
+      el.voicesList.appendChild(li);
+    }
+  }
+  el.voicesManage.addEventListener("click", async () => { el.voicesOverlay.hidden = false; await loadVoices(); });
+  el.voicesClose.addEventListener("click", () => { el.voicesOverlay.hidden = true; });
+  el.voiceUpload.addEventListener("click", async () => {
+    const file = el.voiceFile.files[0];
+    if (!file) { el.voicesHint.textContent = "Choose a recording first (wav, flac, mp3 or ogg)."; return; }
+    const data = new FormData();
+    data.append("file", file); data.append("name", el.voiceName.value.trim());
+    el.voiceUpload.disabled = true; el.voicesHint.textContent = "Uploading…";
+    try {
+      const reply = await api("/api/voices", { method: "POST", body: data });
+      el.voiceFile.value = ""; el.voiceName.value = "";
+      await loadVoices();
+      el.voiceSelect.value = reply.voice.name;
+      el.voicesHint.textContent = `Added "${reply.voice.name}" (${fmtTime(reply.voice.seconds)}). Close this and press "Sing it in this voice" on any song.`;
+    } catch (error) { el.voicesHint.textContent = error.message; }
+    finally { el.voiceUpload.disabled = false; }
   });
 
   // ── library & compare ─────────────────────────────────────────────────
@@ -644,6 +740,7 @@
       ...Object.entries(d.models).map(([name, m]) => [name, m.present ? `${m.size_gb} GB · ${m.path}` : `not downloaded (${m.path})`]),
       ["Cover feature", d.sheetsage2_env && d.models.SheetSage2.present ? "SheetSage2 ready" + (d.ffmpeg ? " · ffmpeg found" : " · no ffmpeg (wav/flac/mp3/ogg still work)") : "SheetSage2 not set up"],
       ["Lyric model", !d.lyrics_model.running ? "Ollama not running" : d.lyrics_model.downloaded ? `${d.lyrics_model.name} ready (Ollama)` : `Ollama running, ${d.lyrics_model.name} not downloaded`],
+      ["Voice conversion", d.voice_conversion.env && d.voice_conversion.seed_vc ? `Seed-VC + Demucs ready · ${d.voice_conversion.voices} reference voice${d.voice_conversion.voices === 1 ? "" : "s"}` : "not set up (see README: Sing it in your voice)"],
       ["Sharing", (d.cloudflared ? `cloudflared: ${d.cloudflared}` : "cloudflared not found") + (d.share_urls.length ? ` · ${d.share_urls.join(", ")}` : "")],
       ["Storage", `${d.disk_free_gb} GB free · ${d.songs} songs · ${d.plans} plans · ${d.trash} in trash`],
       ["Weights", d.weights ? Object.entries(d.weights).map(([k, v]) => `${k}: ${(v.files && Object.values(v.files)[0] && Object.values(v.files)[0].sha256 || "").slice(0, 12)}…`).join(" · ") : "—"],

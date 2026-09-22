@@ -197,6 +197,18 @@
         <div class="sub">Legacy decoder (benchmark VAE) version</div>
         <audio id="alt-player" controls preload="metadata"></audio>
       </div>
+      <div class="voice" id="voice-block" hidden>
+        <div class="voice-row">
+          <span class="sub">Sing it in</span>
+          <select id="voice-select" title="A reference voice you uploaded (Voices…)"></select>
+          <label class="sub" for="voice-semitones">pitch</label>
+          <select id="voice-semitones" title="Shift the vocal up or down to suit the voice (semitones)"></select>
+          <button class="btn-mini" id="btn-voice" type="button" title="Split the vocal off, re-sing it in this voice with Seed-VC and mix it back (about a minute)">Sing it in this voice</button>
+          <button class="btn-mini" id="btn-voices-manage" type="button" title="Add or remove reference voices">Voices…</button>
+        </div>
+        <p class="hint" id="voice-hint" hidden></p>
+        <div class="voice-versions" id="voice-versions"></div>
+      </div>
       <div class="actions">
         <a class="btn-ghost" id="dl-flac" download>Download FLAC</a>
         <a class="btn-ghost" id="dl-wav" download>Download WAV</a>
@@ -247,6 +259,19 @@
     <div class="panel-head"><div><h2>Sections</h2><div class="sub">Reorder, repeat, delete or shorten; the score in the composer is rewritten when you apply.</div></div><button class="btn-ghost" id="sections-close" type="button">Close</button></div>
     <ol class="sections" id="sections-list"></ol>
     <div class="actions"><button class="btn-primary slim" id="sections-apply" type="button">Apply to score</button><span class="hint" id="sections-total"></span></div>
+  </div>
+</div>
+
+<div class="overlay" id="voices-overlay" hidden>
+  <div class="dialog wide">
+    <div class="panel-head"><div><h2>Voices</h2><div class="sub">Reference clips for “Sing it in this voice”. Record 30–60 s of yourself singing (or speaking), alone in a quiet room with no backing track, and add it here.</div></div><button class="btn-ghost" id="voices-close" type="button">Close</button></div>
+    <div class="voice-add">
+      <input type="text" id="voice-name" placeholder="Name (e.g. me)" maxlength="40" autocomplete="off">
+      <input type="file" id="voice-file" accept=".wav,.flac,.mp3,.ogg,audio/wav,audio/flac,audio/mpeg,audio/ogg">
+      <button class="btn-primary slim" id="voice-upload" type="button">Add voice</button>
+    </div>
+    <p class="hint" id="voices-hint"></p>
+    <ul class="voices" id="voices-list"></ul>
   </div>
 </div>
 
