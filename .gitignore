@@ -28,3 +28,6 @@ transcriptions/
 logs/
 tools/
 voices/
+settings.json
+presets.json
+.share_secret

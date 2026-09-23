@@ -1,0 +1,20 @@
+[
+  {"name": "OPM acoustic ballad", "style": "Tagalog, OPM acoustic ballad, warm sincere male vocal, fingerpicked acoustic guitar, soft piano, light strings, heartfelt, 72 BPM"},
+  {"name": "Ben&Ben-style folk pop", "style": "Tagalog, indie folk pop, male and female vocals in harmony, acoustic guitars, violin, ukulele, uplifting and tender, 100 BPM"},
+  {"name": "Prog metal", "style": "English, progressive metal, powerful male vocal, heavy distorted guitars, odd-time riffs, double kick drums, atmospheric synths, 150 BPM"},
+  {"name": "Orchestra + choir (Coldplay-style)", "style": "English, cinematic pop, anthemic male vocal, full orchestra, choir, piano, driving drums, euphoric build, 128 BPM"},
+  {"name": "Dark trap (instrumental)", "style": "instrumental, dark trap, 160 BPM, deep 808 bass, triplet hi-hats, snappy snares, menacing synth lead, no vocals"},
+  {"name": "Orchestral battle (instrumental)", "style": "instrumental, epic orchestral battle music, full orchestra, choir, taiko drums, heroic brass, staccato strings, 140 BPM, no vocals"},
+  {"name": "Okabe-style cinematic", "style": "instrumental, cinematic orchestral, ethereal female vocalise, piano, strings, haunting and melancholic, 90 BPM"},
+  {"name": "Indie pop", "style": "English, indie pop, bright female vocal, jangly guitars, warm synth pads, tight drums, catchy, 118 BPM"},
+  {"name": "Lo-fi hip hop (instrumental)", "style": "instrumental, lo-fi hip hop, mellow, dusty drums, rhodes piano, vinyl crackle, jazzy chords, 82 BPM, no vocals"},
+  {"name": "Modern country", "style": "English, modern country, warm male vocal, acoustic guitar, pedal steel, banjo, steady drums, 96 BPM"},
+  {"name": "K-pop dance", "style": "Korean, K-pop dance pop, energetic female vocal group, punchy synths, big chorus, 128 BPM"},
+  {"name": "Worship ballad", "style": "English, contemporary worship ballad, emotional male vocal, piano, ambient guitars, strings, building drums, 70 BPM"},
+  {"name": "Reggaeton", "style": "Spanish, reggaeton, smooth male vocal, dembow beat, deep bass, plucked synths, 95 BPM"},
+  {"name": "Vocal jazz", "style": "English, vocal jazz, smoky female vocal, upright bass, brushed drums, piano trio, late-night, 110 BPM"},
+  {"name": "Metalcore", "style": "English, metalcore, aggressive male screams with clean chorus, heavy down-tuned guitars, breakdowns, double kick drums, 170 BPM"},
+  {"name": "Synthwave (instrumental)", "style": "instrumental, synthwave, retro 80s synths, driving bass arpeggio, gated reverb drums, neon and nostalgic, 110 BPM, no vocals"},
+  {"name": "Bossa nova", "style": "Portuguese, bossa nova, soft female vocal, nylon guitar, gentle percussion, flute, relaxed, 120 BPM"},
+  {"name": "Gospel choir", "style": "English, gospel, powerful lead vocal with full choir, Hammond organ, piano, clapping, uplifting, 104 BPM"}
+]

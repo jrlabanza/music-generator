@@ -6,8 +6,10 @@
     form: $("form"), title: $("title"), style: $("style"), lyrics: $("lyrics"), cot: $("cot"), seed: $("seed"), takes: $("takes"),
     cfg: $("cfg"), ode: $("ode"), abc: $("abc"), abcInfo: $("abc-info"), advanced: $("advanced"), cover: $("cover"),
     coverFile: $("cover-file"), coverMelody: $("cover-melody"), coverHint: $("cover-hint"), transcribe: $("btn-transcribe"),
+    coverLyrics: $("cover-lyrics"), coverLanguage: $("cover-language"),
     generate: $("btn-generate"), plan: $("btn-plan"), formError: $("form-error"), composeHint: $("compose-hint"),
     pillModel: $("pill-model"), pillGpu: $("pill-gpu"), pillShare: $("pill-share"), pillDoctor: $("pill-doctor"),
+    pillUser: $("pill-user"), pillSettings: $("pill-settings"),
     now: $("now"), nowTitle: $("now-title"), nowSub: $("now-sub"), stepper: $("stepper"), progress: $("progress"),
     bar: $("bar"), stats: $("stats"), queue: $("queue"), cancel: $("btn-cancel"),
     planCard: $("plan"), planTitle: $("plan-title"), planMeta: $("plan-meta"), planSheet: $("plan-sheet"), planAbc: $("plan-abc"),
@@ -15,14 +17,28 @@
     result: $("result"), resultTitle: $("result-title"), resultMeta: $("result-meta"), resultBadge: $("result-badge"),
     resultError: $("result-error"), player: $("player"), altBlock: $("alt-block"), altPlayer: $("alt-player"),
     dlFlac: $("dl-flac"), dlWav: $("dl-wav"), newTake: $("btn-new-take"), restyle: $("btn-restyle"), redecode: $("btn-redecode"),
-    load: $("btn-load"), editScore: $("btn-edit-score"), del: $("btn-delete"), resultStyle: $("result-style"),
+    load: $("btn-load"), editScore: $("btn-edit-score"), del: $("btn-delete"), resultStyle: $("result-style"), shareSong: $("btn-share-song"),
     scoreBlock: $("score-block"), sheet: $("sheet"), abcText: $("abc-text"),
     compare: $("compare"), compareGrid: $("compare-grid"), compareClose: $("btn-compare-close"), compareBtn: $("btn-compare"),
     songs: $("songs"), libraryEmpty: $("library-empty"), libraryCount: $("library-count"),
+    libSearch: $("lib-search"), libFav: $("lib-fav"), libMine: $("lib-mine"),
     voiceBlock: $("voice-block"), voiceSelect: $("voice-select"), voiceSemitones: $("voice-semitones"), voiceBtn: $("btn-voice"),
+    voiceHarmony: $("voice-harmony"), voiceDuet: $("voice-duet"), voiceDuetSections: $("voice-duet-sections"),
     voicesManage: $("btn-voices-manage"), voiceHint: $("voice-hint"), voiceVersions: $("voice-versions"),
     voicesOverlay: $("voices-overlay"), voicesClose: $("voices-close"), voiceName: $("voice-name"), voiceFile: $("voice-file"),
     voiceUpload: $("voice-upload"), voicesHint: $("voices-hint"), voicesList: $("voices-list"),
+    describeText: $("describe-text"), describeBtn: $("btn-describe"), describeGo: $("btn-describe-go"), describeVoice: $("describe-voice"), describeHint: $("describe-hint"),
+    presetSelect: $("preset-select"), presetSave: $("btn-preset-save"), presetRemove: $("btn-preset-remove"), stylesBtn: $("btn-styles"),
+    stylesOverlay: $("styles-overlay"), stylesClose: $("styles-close"), stylesList: $("styles-list"), stylesGo: $("styles-go"), stylesHint: $("styles-hint"),
+    metaBlock: $("meta-block"), fav: $("btn-fav"), rating: $("rating"), tags: $("tags"), notes: $("notes"), metaOwner: $("meta-owner"), family: $("family"),
+    karaokeBlock: $("karaoke-block"), karaokeBtn: $("btn-karaoke"), dlLrc: $("dl-lrc"), dlSrt: $("dl-srt"), karaokeHint: $("karaoke-hint"), lyricsSync: $("lyrics-sync"),
+    stemsBlock: $("stems-block"), stemsBtn: $("btn-stems"), stemsHint: $("stems-hint"), stemList: $("stem-list"),
+    exportBlock: $("export-block"), exportSource: $("export-source"), exportFormat: $("export-format"), exportMaster: $("export-master"),
+    exportFade: $("export-fade"), exportTrim: $("export-trim"), exportBtn: $("btn-export"), exportHint: $("export-hint"), exportList: $("export-list"),
+    songShareOverlay: $("song-share-overlay"), songShareClose: $("song-share-close"), songShareDays: $("song-share-days"), songShareQr: $("song-share-qr"),
+    songShareUrl: $("song-share-url"), songShareCopy: $("song-share-copy"), songShareOpen: $("song-share-open"),
+    settingsOverlay: $("settings-overlay"), settingsClose: $("settings-close"), setName: $("set-name"), setDiscord: $("set-discord"),
+    setTgToken: $("set-tg-token"), setTgChat: $("set-tg-chat"), setFailed: $("set-failed"), settingsSave: $("settings-save"), settingsTest: $("settings-test"), settingsHint: $("settings-hint"),
   };
   const TOKENS_PER_SECOND = 25;
   const STAGE_STEPS = [
@@ -32,13 +48,23 @@
     [/^Synthesizing/, 3],
     [/^(Loading audio decoder|Decoding audio)/, 4],
   ];
+  const KIND_LABEL = { plan: "Planning", decode: "Decoding", transcribe: "Transcribing", voice: "Re-singing", stems: "Splitting stems", karaoke: "Syncing lyrics" };
+  const KIND_SUB = { plan: "Planning the score", decode: "Re-decoding", transcribe: "Transcribing with SheetSage2", voice: "Singing it in another voice",
+                     stems: "Splitting into stems with Demucs", karaoke: "Timing the lyrics with Whisper" };
+  const KIND_WAIT = { transcribe: "SheetSage2 is listening…", voice: "Splitting the vocal off and re-singing it (about a minute per voice)…",
+                      stems: "Demucs is separating the stems (about 10 s)…", karaoke: "Whisper is listening for the words (about 15 s)…" };
   const state = { watching: new Set(), lastStep: 0, selected: null, song: null, songs: [], examples: null, timer: null,
                   online: true, status: null, plan: null, scoreSource: null, compare: new Set(), sections: null,
-                  voices: null, voiceReady: false };
+                  voices: null, voiceReady: false, presets: { builtin: [], user: [] }, origin: null, karaoke: null,
+                  filters: { search: "", fav: false, mine: false }, metaTimer: null };
 
   // ── helpers ────────────────────────────────────────────────────────────
-  async function api(path, options) {
-    const res = await fetch(path, options);
+  const userName = () => { try { return (localStorage.getItem("mgs.name") || "").trim(); } catch { return ""; } };
+  async function api(path, options = {}) {
+    const headers = Object.assign({}, options.headers || {});
+    const name = userName();
+    if (name) headers["X-User"] = encodeURIComponent(name).replace(/%20/g, " ").slice(0, 80);
+    const res = await fetch(path, { ...options, headers });
     if (!res.ok) {
       let message = `${res.status} ${res.statusText}`;
       try { const body = await res.json(); message = body.detail ? (typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail)) : message; } catch {}
@@ -47,14 +73,22 @@
     return res.json();
   }
   const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const patch = (path, body) => api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const put = (path, body) => api(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const fmtTime = (s) => { s = Math.max(0, Math.round(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
   const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString());
   const fmtDate = (t) => new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  const fmtBytes = (b) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} kB`);
   const modeName = { full: "melody + chords", melody: "melody plan", off: "no plan" };
   const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
   function setPill(pill, kind, text) { pill.className = `pill ${kind}`; pill.querySelector(".pill-text").textContent = text; }
   function showError(node, message) { node.textContent = message || ""; node.hidden = !message; }
   function numberOrNull(input) { const v = input.value.trim(); return v === "" ? null : Number(v); }
+  function watchJob(job, subtitle) {
+    for (const j of job.jobs || [job]) state.watching.add(j.id);
+    el.now.hidden = false; el.nowTitle.textContent = job.title; el.nowSub.textContent = subtitle || "Queued"; renderSteps(-1);
+    poll();
+  }
 
   // ── form ───────────────────────────────────────────────────────────────
   function readSampling(prefix) {
@@ -71,9 +105,10 @@
       seed: numberOrNull(el.seed), cfg_scale: numberOrNull(el.cfg), abc: el.abc.value.trim() || null,
       takes: Number(el.takes.value), ode_steps: numberOrNull(el.ode),
       abc_sampling: readSampling("abc"), semantic_sampling: readSampling("semantic"),
+      origin: state.origin,
     };
   }
-  function fillForm({ title, style, lyrics, cot, seed, cfg_scale, abc }) {
+  function fillForm({ title, style, lyrics, cot, seed, cfg_scale, abc, origin }) {
     if (title !== undefined) el.title.value = title || "";
     if (style !== undefined) el.style.value = style || "";
     if (lyrics !== undefined) el.lyrics.value = lyrics || "";
@@ -81,6 +116,7 @@
     if (seed !== undefined) el.seed.value = seed == null ? "" : seed;
     if (cfg_scale !== undefined) el.cfg.value = cfg_scale == null ? "" : cfg_scale;
     if (abc !== undefined) { el.abc.value = abc || ""; if (abc) el.advanced.open = true; }
+    if (origin !== undefined) state.origin = origin || null;
     saveDraft();
   }
   function saveDraft() { try { localStorage.setItem("yue2.draft", JSON.stringify({ ...readForm(), scoreSource: state.scoreSource })); } catch {} }
@@ -101,7 +137,7 @@
   $("btn-clear-abc").addEventListener("click", () => { el.abc.value = ""; state.scoreSource = null; el.abcInfo.hidden = true; saveDraft(); });
   $("btn-example").addEventListener("click", async () => {
     const examples = await loadExamples();
-    fillForm({ title: "City Lights", ...examples.song, abc: "", cfg_scale: null });
+    fillForm({ title: "City Lights", ...examples.song, abc: "", cfg_scale: null, origin: null });
   });
   document.querySelectorAll("[data-score]").forEach((button) => button.addEventListener("click", async () => {
     const examples = await loadExamples();
@@ -112,6 +148,103 @@
   }));
   async function loadExamples() { return state.examples || (state.examples = await api("/api/examples")); }
   el.lyrics.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); el.form.requestSubmit(); } });
+
+  // ── "just describe it" (local Ollama model) ───────────────────────────
+  async function draftFromDescription() {
+    const text = el.describeText.value.trim();
+    if (text.length < 3) { el.describeHint.textContent = "Describe the song in a sentence or two first."; return null; }
+    el.describeBtn.disabled = el.describeGo.disabled = true;
+    el.describeHint.textContent = "Drafting a title, style and lyrics… (20-60 s on the local model)";
+    try {
+      const draft = await post("/api/describe", { text });
+      fillForm({ title: draft.title, style: draft.style, lyrics: draft.lyrics, cot: "full", seed: null, abc: "", origin: null });
+      state.scoreSource = null;
+      el.describeHint.textContent = `Drafted by ${draft.model} in ${draft.seconds}s — read the lyrics over, then Generate (or edit anything first).`;
+      return draft;
+    } catch (error) { el.describeHint.textContent = error.message; return null; }
+    finally { el.describeBtn.disabled = el.describeGo.disabled = false; }
+  }
+  el.describeBtn.addEventListener("click", draftFromDescription);
+  el.describeGo.addEventListener("click", async () => {
+    const draft = await draftFromDescription();
+    if (!draft) return;
+    const body = { ...readForm(), takes: 1 };
+    if (el.describeVoice.value) body.then_voice = el.describeVoice.value;
+    submitJobs("/api/generate", body, el.describeGo);
+  });
+
+  // ── style presets ─────────────────────────────────────────────────────
+  async function loadPresets() {
+    try { state.presets = await api("/api/presets"); } catch { return; }
+    const current = el.presetSelect.value;
+    el.presetSelect.innerHTML = '<option value="">presets…</option>';
+    const groups = [["Mine", state.presets.user, "u"], ["Built-in", state.presets.builtin, "b"]];
+    for (const [label, list, prefix] of groups) {
+      if (!list.length) continue;
+      const group = document.createElement("optgroup"); group.label = label;
+      list.forEach((preset, i) => { const option = document.createElement("option"); option.value = `${prefix}${i}`; option.textContent = preset.name; group.appendChild(option); });
+      el.presetSelect.appendChild(group);
+    }
+    if ([...el.presetSelect.options].some((o) => o.value === current)) el.presetSelect.value = current;
+    el.presetRemove.hidden = !el.presetSelect.value.startsWith("u");
+  }
+  const presetOf = (value) => (value ? (value[0] === "u" ? state.presets.user : state.presets.builtin)[Number(value.slice(1))] : null);
+  el.presetSelect.addEventListener("change", () => {
+    const preset = presetOf(el.presetSelect.value);
+    if (preset) { fillForm({ style: preset.style }); }
+    el.presetRemove.hidden = !el.presetSelect.value.startsWith("u");
+  });
+  el.presetSave.addEventListener("click", async () => {
+    const style = el.style.value.trim();
+    if (!style) { alert("Write a style first."); return; }
+    const name = prompt("Name for this style preset:", style.split(",").slice(0, 2).join(",").slice(0, 40));
+    if (!name) return;
+    const user = state.presets.user.filter((p) => p.name !== name.trim()).concat([{ name: name.trim(), style }]);
+    try { await put("/api/presets", { presets: user }); await loadPresets(); el.presetSelect.value = `u${user.length - 1}`; el.presetRemove.hidden = false; }
+    catch (error) { alert(error.message); }
+  });
+  el.presetRemove.addEventListener("click", async () => {
+    const value = el.presetSelect.value;
+    if (!value.startsWith("u")) return;
+    const user = state.presets.user.filter((_, i) => i !== Number(value.slice(1)));
+    try { await put("/api/presets", { presets: user }); await loadPresets(); el.presetSelect.value = ""; el.presetRemove.hidden = true; }
+    catch (error) { alert(error.message); }
+  });
+  el.stylesBtn.addEventListener("click", async () => {
+    await loadPresets();
+    el.stylesList.innerHTML = "";
+    for (const [prefix, list] of [["u", state.presets.user], ["b", state.presets.builtin]]) {
+      list.forEach((preset, i) => {
+        const li = document.createElement("li");
+        li.innerHTML = `<label class="check"><input type="checkbox"><span class="name"></span></label><span class="grow"></span>`;
+        li.querySelector("input").value = `${prefix}${i}`;
+        li.querySelector(".name").textContent = preset.name;
+        li.querySelector(".grow").textContent = preset.style;
+        el.stylesList.appendChild(li);
+      });
+    }
+    el.stylesHint.textContent = el.lyrics.value.trim() ? "" : "Write (or draft) lyrics first — every style uses the same title and lyrics.";
+    el.stylesOverlay.hidden = false;
+  });
+  el.stylesClose.addEventListener("click", () => { el.stylesOverlay.hidden = true; });
+  el.stylesGo.addEventListener("click", async () => {
+    const picked = [...el.stylesList.querySelectorAll("input:checked")].map((box) => presetOf(box.value)).filter(Boolean);
+    const base = readForm();
+    if (!picked.length) { el.stylesHint.textContent = "Tick at least one style."; return; }
+    if (!base.lyrics) { el.stylesHint.textContent = "Write (or draft) lyrics first."; return; }
+    el.stylesGo.disabled = true;
+    let first = null, count = 0;
+    try {
+      for (const preset of picked) {
+        const title = `${base.title || "song"} (${preset.name})`;
+        const job = await post("/api/generate", { ...base, title, style: preset.style, takes: 1, seed: null, abc: null, origin: state.song ? { song_id: state.song.id, kind: "styles" } : null });
+        state.watching.add(job.id); first = first || job; count++;
+      }
+      el.stylesOverlay.hidden = true;
+      if (first) watchJob(first, `Queued · ${count} style${count === 1 ? "" : "s"}`);
+    } catch (error) { el.stylesHint.textContent = error.message; }
+    finally { el.stylesGo.disabled = false; }
+  });
 
   // ── lyric writing (local Ollama model) ───────────────────────────────
   const lyricButtons = [$("btn-lyrics-continue"), $("btn-lyrics-write")];
@@ -153,12 +286,7 @@
     button.disabled = true;
     try {
       const reply = await post(path, body);
-      for (const job of reply.jobs || [reply]) state.watching.add(job.id);
-      el.now.hidden = false;
-      el.nowTitle.textContent = reply.title;
-      el.nowSub.textContent = "Queued";
-      renderSteps(-1);
-      poll();
+      watchJob(reply);
     } catch (error) {
       showError(el.formError, error.message);
     } finally {
@@ -280,13 +408,12 @@
     if (!file) { el.coverHint.textContent = "Choose an audio file first."; return; }
     const data = new FormData();
     data.append("file", file); data.append("melody_only", el.coverMelody.checked ? "true" : "false"); data.append("title", file.name.replace(/\.[^.]+$/, ""));
+    data.append("lyrics", el.coverLyrics.checked ? "true" : "false"); data.append("language", el.coverLanguage.value.trim());
     el.transcribe.disabled = true; el.coverHint.textContent = `Uploading ${file.name}…`;
     try {
       const job = await api("/api/transcribe", { method: "POST", body: data });
-      state.watching.add(job.id);
-      el.coverHint.textContent = "Transcribing with SheetSage2 — about a minute for a 3-minute song. The score appears in the box above when done.";
-      el.now.hidden = false; el.nowTitle.textContent = job.title; el.nowSub.textContent = "Queued"; renderSteps(-1);
-      poll();
+      el.coverHint.textContent = "Transcribing with SheetSage2 — about a minute for a 3-minute song" + (el.coverLyrics.checked ? ", then Whisper writes down the words" : "") + ". The score appears in the box above when done.";
+      watchJob(job);
     } catch (error) { el.coverHint.textContent = error.message; }
     finally { el.transcribe.disabled = false; }
   });
@@ -316,7 +443,7 @@
     const m = status.model;
     if (m.state === "loading") setPill(el.pillModel, "busy", m.stage ? m.stage.label + "…" : "Loading model…");
     else if (m.state === "error") setPill(el.pillModel, "err", "Model failed to load");
-    else if (status.current) setPill(el.pillModel, "busy", { plan: "Planning", decode: "Decoding", transcribe: "Transcribing" }[status.current.kind] || "Generating");
+    else if (status.current) setPill(el.pillModel, "busy", KIND_LABEL[status.current.kind] || "Generating");
     else setPill(el.pillModel, "ok", ["Model ready", m.vram_mode === "low" ? "low-VRAM mode" : null, m.quantization === "fp8" ? "FP8" : null].filter(Boolean).join(" · "));
     if (status.gpu) setPill(el.pillGpu, "", `GPU ${status.gpu.used_gib.toFixed(1)} / ${status.gpu.total_gib.toFixed(1)} GB`);
     const share = status.share_urls || [];
@@ -339,6 +466,7 @@
       li.classList.toggle("active", n === step);
     });
   }
+  const byLine = (job) => job.owner ? `${job.title} (${job.owner})` : job.title;
   function renderNow(status) {
     const current = status.current;
     const queue = status.queue || [];
@@ -349,7 +477,7 @@
       const stage = current.stage;
       el.stepper.hidden = kind !== "song";
       el.nowTitle.textContent = current.title;
-      el.nowSub.textContent = `${{ plan: "Planning the score", decode: "Re-decoding", transcribe: "Transcribing with SheetSage2" }[kind] || "Running"} · ${fmtTime(current.elapsed)}`;
+      el.nowSub.textContent = `${KIND_SUB[kind] || "Running"}${current.owner ? ` · queued by ${current.owner}` : ""} · ${fmtTime(current.elapsed)}`;
       el.cancel.disabled = false;
       el.cancel.dataset.job = current.id;
       let stats = [], fraction = null;
@@ -368,7 +496,7 @@
           if (/^Generating song/.test(stage.label)) stats.push(`≈ <b>${fmtTime(stage.completed / TOKENS_PER_SECOND)}</b> of audio so far`);
         } else stats.push(stage.label);
         stats.push(`${fmtTime(stage.elapsed)} in this step`);
-      } else stats.push(kind === "transcribe" ? "SheetSage2 is listening…" : kind === "voice" ? "Splitting the vocal off and re-singing it (about a minute)…" : "Switching stages…");
+      } else stats.push(KIND_WAIT[kind] || "Switching stages…");
       el.stats.innerHTML = stats.join("<span class='sep'> · </span>");
       el.progress.classList.toggle("indeterminate", fraction == null);
       el.bar.style.width = fraction == null ? "" : `${Math.max(2, fraction * 100)}%`;
@@ -376,7 +504,7 @@
       const next = queue[0];
       el.stepper.hidden = false;
       el.nowTitle.textContent = next.title;
-      el.nowSub.textContent = status.model.state === "loading" ? "Queued · waiting for the model to load" : "Queued";
+      el.nowSub.textContent = (status.model.state === "loading" ? "Queued · waiting for the model to load" : "Queued") + (next.owner ? ` · by ${next.owner}` : "");
       renderSteps(-1);
       el.progress.classList.add("indeterminate");
       el.stats.textContent = "";
@@ -385,7 +513,7 @@
     }
     const waiting = current ? queue : queue.slice(1);
     el.queue.hidden = !waiting.length;
-    el.queue.textContent = waiting.length ? `Up next: ${waiting.map((j) => j.title).join(", ")}` : "";
+    el.queue.textContent = waiting.length ? `Up next: ${waiting.map(byLine).join(", ")}` : "";
   }
   el.cancel.addEventListener("click", async () => {
     const id = el.cancel.dataset.job;
@@ -407,12 +535,20 @@
         else if (job.kind === "plan") showPlan(job);
         else if (job.kind === "decode") { await openSong(job.result.song_id); }
         else if (job.kind === "transcribe") applyTranscription(job);
-        else if (job.kind === "voice") { await openSong(job.result.song_id, { scroll: false }); el.voiceHint.hidden = true; }
+        else if (["voice", "stems", "karaoke"].includes(job.kind)) {
+          if (state.song && state.song.id !== job.result.song_id) continue;   // finished for a song that is no longer open
+          await openSong(job.result.song_id, { scroll: false });
+          if (job.kind === "voice") el.voiceHint.hidden = true;
+        }
       } else if (job.state === "failed") {
         if (job.kind === "transcribe") el.coverHint.textContent = job.error || "Transcription failed.";
+        else if (job.kind === "voice" && state.song) { el.voiceHint.hidden = false; el.voiceHint.textContent = job.error; }
+        else if (job.kind === "stems" && state.song) el.stemsHint.textContent = job.error;
+        else if (job.kind === "karaoke" && state.song) el.karaokeHint.textContent = job.error;
         else showResultError(job.title, job.error || `${job.kind} failed.`);
       } else if (job.state === "cancelled") {
         if (job.kind === "transcribe") el.coverHint.textContent = "Cancelled.";
+        else if (["voice", "stems", "karaoke"].includes(job.kind)) { if (state.song) openSong(state.song.id, { scroll: false }).catch(() => {}); }
         else showResultError(job.title, "Cancelled.", "warn");
       }
     }
@@ -443,14 +579,19 @@
 
   function applyTranscription(job) {
     state.scoreSource = null;
-    fillForm({ abc: job.result.abc, cot: job.result.melody_only ? "melody" : "full" });
+    fillForm({ abc: job.result.abc, cot: job.result.melody_only ? "melody" : "full", origin: null });
+    const heard = (job.result.lyrics_text || "").trim();
     if ($("cover-instrumental").checked) {
       const tags = tagsFromScore(job.result.abc);
       if (tags) fillForm({ lyrics: tags, title: el.title.value.trim() || `${(job.request.filename || "cover").replace(/\.[^.]+$/, "")} (cover)` });
+    } else if (heard) {
+      fillForm({ lyrics: heard, title: el.title.value.trim() || `${(job.request.filename || "cover").replace(/\.[^.]+$/, "")} (cover)` });
     }
     const warnings = job.result.warnings || [];
     el.coverHint.textContent = `Transcribed ${job.request.filename || "the recording"}${job.result.seconds ? ` (${fmtTime(job.result.seconds)})` : ""} in ${fmtTime(job.result.total_seconds)}. ` +
-      (warnings.length ? `Warnings: ${warnings.join("; ")}. ` : "") + ($("cover-instrumental").checked ? "Lyrics filled with instrumental tags — set a style and Generate." : "Now add lyrics and a style, then Generate.");
+      (warnings.length ? `Warnings: ${warnings.join("; ")}. ` : "") +
+      ($("cover-instrumental").checked ? "Lyrics filled with instrumental tags — set a style and Generate." :
+       heard ? "Whisper's words are in the lyrics box — fix what it misheard, set a style, and Generate." : "Now add lyrics and a style, then Generate.");
     el.cover.open = true; el.advanced.open = true;
     el.abc.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -465,7 +606,8 @@
     showError(el.resultError, message);
     el.player.removeAttribute("src"); el.player.hidden = true; el.altBlock.hidden = true;
     el.scoreBlock.hidden = true; el.resultStyle.textContent = "";
-    [el.dlFlac, el.dlWav, el.load, el.editScore, el.del, el.newTake, el.restyle, el.redecode].forEach((node) => (node.hidden = true));
+    [el.dlFlac, el.dlWav, el.load, el.editScore, el.del, el.newTake, el.restyle, el.redecode, el.shareSong,
+     el.metaBlock, el.karaokeBlock, el.voiceBlock, el.stemsBlock, el.exportBlock].forEach((node) => (node.hidden = true));
     state.song = null;
   }
   async function openSong(id, { scroll = true } = {}) {
@@ -482,18 +624,25 @@
     meta.push(fmtDate(song.created));
     el.resultMeta.textContent = meta.join(" · ");
     el.resultStyle.textContent = song.style;
-    el.player.hidden = false; el.player.src = song.audio_url;
+    el.player.hidden = false;
+    if (el.player.dataset.song !== song.id) { el.player.src = song.audio_url; el.player.dataset.song = song.id; }
     el.altBlock.hidden = !song.alt_audio;
     if (song.alt_audio) el.altPlayer.src = song.alt_audio + "?t=" + Date.now(); else el.altPlayer.removeAttribute("src");
     el.dlFlac.href = song.audio_url; el.dlFlac.download = `${song.id}.flac`;
     el.dlWav.href = `/api/songs/${song.id}/audio.wav`; el.dlWav.download = `${song.id}.wav`;
-    [el.dlFlac, el.dlWav, el.load, el.del, el.newTake].forEach((node) => (node.hidden = false));
+    [el.dlFlac, el.dlWav, el.load, el.del, el.newTake, el.shareSong].forEach((node) => (node.hidden = false));
     el.editScore.hidden = el.restyle.hidden = !song.score;
     el.redecode.hidden = !(song.has_latent && song.legacy_vae_available);
     el.redecode.textContent = song.alt_audio ? "Re-decode again (legacy)" : "Re-decode (legacy)";
     renderSheet(el.sheet, el.abcText, song.score, "result");
     el.scoreBlock.hidden = !song.score;
+    renderMeta(song);
+    renderKaraoke(song);
     renderVoiceBlock(song);
+    renderStems(song);
+    renderExport(song);
+    setMediaSession(song);
+    try { history.replaceState(null, "", `?song=${encodeURIComponent(song.id)}`); } catch {}
     renderLibrary();
     if (scroll) el.result.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
@@ -517,36 +666,32 @@
   el.load.addEventListener("click", () => {
     const { request, title } = state.song;
     state.scoreSource = request.abc || null;
-    fillForm({ title, style: request.style, lyrics: request.lyrics, cot: request.cot, seed: request.seed, cfg_scale: request.cfg_scale ?? null, abc: request.abc || "" });
+    fillForm({ title, style: request.style, lyrics: request.lyrics, cot: request.cot, seed: request.seed, cfg_scale: request.cfg_scale ?? null, abc: request.abc || "", origin: { song_id: state.song.id, kind: "load" } });
     el.style.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   el.editScore.addEventListener("click", () => {
     const { request, title, score } = state.song;
     state.scoreSource = score;
-    fillForm({ title: `${title} (edited)`, style: request.style, lyrics: request.lyrics, cot: request.cot === "off" ? "full" : request.cot, seed: request.seed, abc: score });
+    fillForm({ title: `${title} (edited)`, style: request.style, lyrics: request.lyrics, cot: request.cot === "off" ? "full" : request.cot, seed: request.seed, abc: score, origin: { song_id: state.song.id, kind: "edit" } });
     el.abc.scrollIntoView({ behavior: "smooth", block: "center" });
     el.abc.focus();
   });
   el.restyle.addEventListener("click", () => {
     const { request, title, score } = state.song;
     state.scoreSource = score;
-    fillForm({ title: `${title} (new style)`, style: request.style, lyrics: request.lyrics, cot: request.cot === "off" ? "full" : request.cot, seed: null, abc: score });
+    fillForm({ title: `${title} (new style)`, style: request.style, lyrics: request.lyrics, cot: request.cot === "off" ? "full" : request.cot, seed: null, abc: score, origin: { song_id: state.song.id, kind: "restyle" } });
     el.style.scrollIntoView({ behavior: "smooth", block: "start" });
     el.style.focus(); el.style.select();
   });
   el.newTake.addEventListener("click", () => {
     const { request, title } = state.song;
     submitJobs("/api/generate", { title: `${title} (new take)`, style: request.style, lyrics: request.lyrics, cot: request.cot, seed: null,
-                                  cfg_scale: request.cfg_scale ?? null, abc: request.abc || null, takes: 1 }, el.newTake);
+                                  cfg_scale: request.cfg_scale ?? null, abc: request.abc || null, takes: 1, origin: { song_id: state.song.id, kind: "take" } }, el.newTake);
   });
   el.redecode.addEventListener("click", async () => {
     el.redecode.disabled = true;
-    try {
-      const job = await api(`/api/songs/${state.song.id}/redecode`, { method: "POST" });
-      state.watching.add(job.id);
-      el.now.hidden = false; el.nowTitle.textContent = job.title; el.nowSub.textContent = "Queued"; renderSteps(-1);
-      poll();
-    } catch (error) { alert(error.message); }
+    try { watchJob(await api(`/api/songs/${state.song.id}/redecode`, { method: "POST" })); }
+    catch (error) { alert(error.message); }
     finally { el.redecode.disabled = false; }
   });
   el.del.addEventListener("click", async () => {
@@ -554,7 +699,8 @@
     if (!song) return;
     if (!confirm(`Delete "${song.title}"?\n\nIt moves to the trash folder on the PC (trash\\${song.id}), so it can be restored by hand.`)) return;
     // release every player that may hold a suspended download of this song's files
-    for (const audio of [el.player, el.altPlayer, ...el.voiceVersions.querySelectorAll("audio"), ...el.compareGrid.querySelectorAll("audio")]) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+    for (const audio of [el.player, el.altPlayer, ...el.voiceVersions.querySelectorAll("audio"), ...el.stemList.querySelectorAll("audio"), ...el.compareGrid.querySelectorAll("audio")]) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+    delete el.player.dataset.song;
     el.del.disabled = true;
     try {
       const reply = await api(`/api/songs/${song.id}`, { method: "DELETE" });
@@ -569,27 +715,226 @@
     } finally { el.del.disabled = false; }
   });
 
+  // ── favourites, rating, tags, notes, version family ───────────────────
+  function renderMeta(song) {
+    const meta = song.meta || {};
+    el.metaBlock.hidden = false;
+    el.fav.textContent = meta.favorite ? "★" : "☆";
+    el.fav.classList.toggle("on", !!meta.favorite);
+    el.rating.innerHTML = "";
+    for (let n = 1; n <= 5; n++) {
+      const star = document.createElement("button");
+      star.type = "button"; star.className = `rate${n <= (meta.rating || 0) ? " on" : ""}`; star.textContent = "★"; star.title = `${n} / 5`;
+      star.addEventListener("click", () => saveMeta({ rating: meta.rating === n ? 0 : n }));
+      el.rating.appendChild(star);
+    }
+    el.tags.value = (meta.tags || []).join(", ");
+    el.notes.value = meta.notes || "";
+    el.metaOwner.textContent = meta.owner ? `by ${meta.owner}` : "";
+    const family = song.family || {};
+    const parts = [];
+    if (family.parent) parts.push(`<span>from <a href="#" data-song="${family.parent.id}"></a></span>`);
+    if ((family.children || []).length) parts.push(`<span>versions: ${family.children.map((c) => `<a href="#" data-song="${c.id}"></a>`).join(", ")}</span>`);
+    el.family.hidden = !parts.length;
+    el.family.innerHTML = parts.join(" · ");
+    const titles = [family.parent, ...(family.children || [])].filter(Boolean);
+    el.family.querySelectorAll("a").forEach((a) => {
+      const item = titles.find((t) => t.id === a.dataset.song);
+      a.textContent = item ? item.title : a.dataset.song;
+      a.addEventListener("click", (e) => { e.preventDefault(); openSong(a.dataset.song).catch((error) => alert(error.message)); });
+    });
+  }
+  async function saveMeta(changes) {
+    if (!state.song) return;
+    try {
+      const meta = await patch(`/api/songs/${state.song.id}/meta`, changes);
+      state.song.meta = meta;
+      const item = state.songs.find((s) => s.id === state.song.id);
+      if (item) Object.assign(item, { favorite: meta.favorite, rating: meta.rating, tags: meta.tags });
+      renderMeta(state.song); renderLibrary();
+    } catch (error) { alert(error.message); }
+  }
+  el.fav.addEventListener("click", () => saveMeta({ favorite: !(state.song && state.song.meta && state.song.meta.favorite) }));
+  el.tags.addEventListener("change", () => saveMeta({ tags: el.tags.value.split(",").map((t) => t.trim()).filter(Boolean) }));
+  el.notes.addEventListener("input", () => { clearTimeout(state.metaTimer); state.metaTimer = setTimeout(() => saveMeta({ notes: el.notes.value }), 800); });
+  el.notes.addEventListener("blur", () => { clearTimeout(state.metaTimer); if (state.song && el.notes.value !== (state.song.meta.notes || "")) saveMeta({ notes: el.notes.value }); });
+
+  // ── karaoke (synced lyrics) ───────────────────────────────────────────
+  const hasWords = (song) => /[^\s\[\]]/.test((song.request.lyrics || "").replace(/\[[^\]]*\]/g, ""));
+  async function renderKaraoke(song) {
+    state.karaoke = null;
+    el.lyricsSync.hidden = true; el.lyricsSync.innerHTML = "";
+    el.karaokeHint.textContent = "";
+    el.karaokeBlock.hidden = !(song.voice_ready && hasWords(song));
+    el.dlLrc.hidden = el.dlSrt.hidden = !song.karaoke;
+    if (!song.karaoke) { el.karaokeBtn.textContent = "Karaoke: sync lyrics"; return; }
+    el.karaokeBtn.textContent = "Re-sync lyrics";
+    el.dlLrc.href = song.karaoke.lrc; el.dlLrc.download = `${song.id}.lrc`;
+    el.dlSrt.href = song.karaoke.srt; el.dlSrt.download = `${song.id}.srt`;
+    if (song.karaoke.matched_ratio != null && song.karaoke.matched_ratio < 0.6) el.karaokeHint.textContent = `Only ${Math.round(song.karaoke.matched_ratio * 100)}% of the words were recognised — timings may drift.`;
+    try {
+      const data = await fetch(`${song.karaoke.json}?t=${Date.now()}`, { headers: userName() ? { "X-User": userName() } : {} }).then((r) => r.json());
+      if (!state.song || state.song.id !== song.id) return;
+      state.karaoke = data.lines || [];
+      el.lyricsSync.hidden = false;
+      let section = null;
+      state.karaoke.forEach((line, i) => {
+        if (line.section !== section) { section = line.section; const h = document.createElement("div"); h.className = "sync-section"; h.textContent = section || ""; el.lyricsSync.appendChild(h); }
+        const node = document.createElement("div");
+        node.className = "sync-line"; node.dataset.index = i; node.textContent = line.text; node.title = `${fmtTime(line.start)}${line.estimated ? " (estimated)" : ""}`;
+        node.addEventListener("click", () => { el.player.currentTime = line.start; el.player.play().catch(() => {}); });
+        el.lyricsSync.appendChild(node);
+      });
+      highlightLine();
+    } catch (error) { el.karaokeHint.textContent = `Could not load the sync: ${error.message}`; }
+  }
+  function highlightLine() {
+    if (!state.karaoke || el.lyricsSync.hidden) return;
+    const t = el.player.currentTime;
+    let active = -1;
+    state.karaoke.forEach((line, i) => { if (t >= line.start - 0.15) active = i; });
+    el.lyricsSync.querySelectorAll(".sync-line").forEach((node) => {
+      const i = Number(node.dataset.index);
+      const on = i === active && t <= state.karaoke[i].end + 0.6;
+      node.classList.toggle("active", on);
+      node.classList.toggle("past", i < active);
+      if (on && !el.player.paused) node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }
+  el.player.addEventListener("timeupdate", highlightLine);
+  el.karaokeBtn.addEventListener("click", async () => {
+    if (!state.song) return;
+    el.karaokeBtn.disabled = true; el.karaokeHint.textContent = "Queued…";
+    try { watchJob(await api(`/api/songs/${state.song.id}/karaoke`, { method: "POST" })); el.karaokeHint.textContent = "Timing the lyrics — the synced view appears here when done (about 15 s)."; }
+    catch (error) { el.karaokeHint.textContent = error.message; }
+    finally { el.karaokeBtn.disabled = false; }
+  });
+
+  // ── stems ─────────────────────────────────────────────────────────────
+  const STEM_LABELS = { accompaniment: "Instrumental (no vocals)", vocals: "Acapella (vocals only)", drums: "Drums", bass: "Bass", other: "Other (keys, guitars, synths)" };
+  function renderStems(song) {
+    el.stemsBlock.hidden = !(song.voice_ready || song.stems);
+    el.stemsHint.textContent = "";
+    el.stemList.innerHTML = "";
+    el.stemsBtn.hidden = !!song.stems;
+    if (!song.stems) return;
+    for (const [name, label] of Object.entries(STEM_LABELS)) {
+      if (!song.stems[name]) continue;
+      const block = document.createElement("div");
+      block.className = "alt stem";
+      block.innerHTML = `<div class="sub"><span></span><a class="btn-mini" download>Download</a></div><audio controls preload="none"></audio>`;
+      block.querySelector("span").textContent = label;
+      const link = block.querySelector("a"); link.href = song.stems[name]; link.download = `${song.id}-${name}.flac`;
+      block.querySelector("audio").src = song.stems[name];
+      el.stemList.appendChild(block);
+    }
+  }
+  el.stemsBtn.addEventListener("click", async () => {
+    if (!state.song) return;
+    el.stemsBtn.disabled = true; el.stemsHint.textContent = "Queued…";
+    try { watchJob(await api(`/api/songs/${state.song.id}/stems`, { method: "POST" })); el.stemsHint.textContent = "Separating — the stems appear here when done (about 10 s)."; }
+    catch (error) { el.stemsHint.textContent = error.message; }
+    finally { el.stemsBtn.disabled = false; }
+  });
+
+  // ── export (mastered MP3 / WAV / FLAC) ────────────────────────────────
+  function renderExport(song) {
+    el.exportBlock.hidden = !song.voice_ready;
+    el.exportHint.textContent = "";
+    el.exportSource.innerHTML = "";
+    const sources = [["audio.flac", "original"], ...(song.voice_versions || []).map((v) => [v.file, `in ${v.name}'s voice`])];
+    for (const [file, label] of sources) { const option = document.createElement("option"); option.value = file; option.textContent = label; el.exportSource.appendChild(option); }
+    el.exportList.innerHTML = "";
+    for (const item of song.exports || []) {
+      const row = document.createElement("div");
+      row.className = "export-row";
+      row.innerHTML = `<a download></a><span class="sub"></span>`;
+      const link = row.querySelector("a"); link.href = item.url; link.download = item.name; link.textContent = item.name;
+      row.querySelector("span").textContent = fmtBytes(item.bytes);
+      el.exportList.appendChild(row);
+    }
+  }
+  el.exportBtn.addEventListener("click", async () => {
+    if (!state.song) return;
+    el.exportBtn.disabled = true; el.exportHint.textContent = "Exporting… (a few seconds)";
+    try {
+      const reply = await post(`/api/songs/${state.song.id}/export`, { format: el.exportFormat.value, source: el.exportSource.value, normalize: el.exportMaster.checked,
+                                                                    fade_out: Number(el.exportFade.value) || 0, trim: el.exportTrim.checked });
+      el.exportHint.textContent = `Done in ${reply.total_seconds}s` + (reply.lufs_after != null ? ` · ${reply.lufs_before} → ${reply.lufs_after} LUFS, peak ${reply.peak_dbfs} dBFS` : "") + ".";
+      await openSong(state.song.id, { scroll: false });
+      const link = [...el.exportList.querySelectorAll("a")].find((a) => a.download === reply.download);
+      if (link) link.classList.add("fresh");
+    } catch (error) { el.exportHint.textContent = error.message; }
+    finally { el.exportBtn.disabled = false; }
+  });
+
+  // ── share a song (listen-only link) ───────────────────────────────────
+  async function refreshShareLink() {
+    if (!state.song) return;
+    try {
+      const reply = await api(`/api/songs/${state.song.id}/share?days=${el.songShareDays.value}`);
+      el.songShareUrl.textContent = reply.url;
+      el.songShareOpen.href = reply.url;
+      el.songShareQr.src = `/api/qr.svg?text=${encodeURIComponent(reply.url)}`;
+    } catch (error) { el.songShareUrl.textContent = error.message; }
+  }
+  el.shareSong.addEventListener("click", () => { el.songShareOverlay.hidden = false; refreshShareLink(); });
+  el.songShareDays.addEventListener("change", refreshShareLink);
+  el.songShareClose.addEventListener("click", () => { el.songShareOverlay.hidden = true; });
+  el.songShareCopy.addEventListener("click", async () => {
+    const url = el.songShareUrl.textContent;
+    try { await navigator.clipboard.writeText(url); el.songShareCopy.textContent = "Copied"; setTimeout(() => (el.songShareCopy.textContent = "Copy link"), 1500); }
+    catch { prompt("Link:", url); }
+  });
+
+  // ── media session (lock-screen controls on phones) ────────────────────
+  function setMediaSession(song) {
+    if (!("mediaSession" in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: "Music Gen Studio", album: song.style.slice(0, 80),
+        artwork: [{ src: "/static/icons/icon-512.png", sizes: "512x512", type: "image/png" }, { src: "/static/icons/icon-192.png", sizes: "192x192", type: "image/png" }] });
+      const step = (delta) => {
+        const ids = visibleSongs().map((s) => s.id);
+        const next = ids[(ids.indexOf(state.selected) + delta + ids.length) % ids.length];
+        if (next) openSong(next, { scroll: false }).then(() => el.player.play().catch(() => {})).catch(() => {});
+      };
+      navigator.mediaSession.setActionHandler("play", () => el.player.play());
+      navigator.mediaSession.setActionHandler("pause", () => el.player.pause());
+      navigator.mediaSession.setActionHandler("previoustrack", () => step(-1));
+      navigator.mediaSession.setActionHandler("nexttrack", () => step(1));
+      navigator.mediaSession.setActionHandler("seekto", (d) => { if (d.seekTime != null) el.player.currentTime = d.seekTime; });
+    } catch {}
+  }
+
   // ── sing it in my voice ───────────────────────────────────────────────
+  const autoOption = document.createElement("option");
+  autoOption.value = "auto"; autoOption.textContent = "auto (fit my range)";
+  el.voiceSemitones.appendChild(autoOption);
   for (let s = 12; s >= -12; s--) {
     const option = document.createElement("option");
     option.value = s; option.textContent = s === 0 ? "same pitch" : (s > 0 ? `+${s}` : `${s}`) + (Math.abs(s) === 12 ? " (octave)" : "");
     el.voiceSemitones.appendChild(option);
   }
   el.voiceSemitones.value = "0";
+  function fillVoiceSelect(select, keep, empty) {
+    const current = select.value;
+    select.innerHTML = "";
+    if (empty) { const option = document.createElement("option"); option.value = ""; option.textContent = empty; select.appendChild(option); }
+    for (const voice of state.voices || []) {
+      const option = document.createElement("option");
+      option.value = voice.name; option.textContent = voice.seconds ? `${voice.name} (${fmtTime(voice.seconds)})` : voice.name;
+      select.appendChild(option);
+    }
+    if (keep && [...select.options].some((o) => o.value === current)) select.value = current;
+  }
   async function loadVoices() {
     try {
       const reply = await api("/api/voices");
       state.voices = reply.voices; state.voiceReady = reply.ready;
     } catch { state.voices = state.voices || []; }
-    const current = el.voiceSelect.value;
-    el.voiceSelect.innerHTML = "";
-    for (const voice of state.voices) {
-      const option = document.createElement("option");
-      option.value = voice.name; option.textContent = voice.seconds ? `${voice.name} (${fmtTime(voice.seconds)})` : voice.name;
-      el.voiceSelect.appendChild(option);
-    }
-    if (!state.voices.length) { const option = document.createElement("option"); option.value = ""; option.textContent = "no voices yet"; el.voiceSelect.appendChild(option); }
-    else if ([...el.voiceSelect.options].some((o) => o.value === current)) el.voiceSelect.value = current;
+    fillVoiceSelect(el.voiceSelect, true, state.voices.length ? null : "no voices yet");
+    fillVoiceSelect(el.voiceDuet, true, "none");
+    fillVoiceSelect(el.describeVoice, true, "the original vocal");
     el.voiceSelect.disabled = el.voiceBtn.disabled = !state.voices.length || !state.voiceReady;
     renderVoicesList();
     return state.voices;
@@ -602,7 +947,7 @@
       const block = document.createElement("div");
       block.className = "alt";
       block.innerHTML = `<div class="sub"><span>In <b></b>'s voice</span><a class="btn-mini" download>Download</a></div><audio controls preload="metadata"></audio>`;
-      block.querySelector("b").textContent = version.name;
+      block.querySelector("b").textContent = version.name.replace(/-harmony/, " + harmonies").replace(/-duet-/, ", duet with ");
       const link = block.querySelector("a"); link.href = version.url; link.download = `${song.id}-voice-${version.name}.flac`;
       block.querySelector("audio").src = `${version.url}?t=${Math.round(version.modified || 0)}`;
       el.voiceVersions.appendChild(block);
@@ -612,14 +957,19 @@
   el.voiceBtn.addEventListener("click", async () => {
     const song = state.song, voice = el.voiceSelect.value;
     if (!song || !voice) return;
+    const pitch = el.voiceSemitones.value;
+    const body = { voice, semitones: pitch === "auto" ? 0 : Number(pitch) || 0, auto_f0: pitch === "auto", steps: 30,
+                   harmonies: el.voiceHarmony.value ? el.voiceHarmony.value.split(",").map(Number) : [],
+                   duet_voice: el.voiceDuet.value || null, duet_sections: [el.voiceDuetSections.value] };
+    if (body.duet_voice === voice) { el.voiceHint.hidden = false; el.voiceHint.textContent = "Pick a different voice for the duet."; return; }
+    if (body.duet_voice && !hasWords(song)) { el.voiceHint.hidden = false; el.voiceHint.textContent = "A duet needs sung lyrics (the sections come from the lyric timings)."; return; }
     el.voiceBtn.disabled = true;
     el.voiceHint.hidden = false; el.voiceHint.textContent = "Queued…";
     try {
-      const job = await post(`/api/songs/${song.id}/voice`, { voice, semitones: Number(el.voiceSemitones.value) || 0, steps: 30 });
-      state.watching.add(job.id);
-      el.voiceHint.textContent = `Working — "${job.title}" appears below this player when done (about a minute; the first run downloads the models).`;
-      el.now.hidden = false; el.nowTitle.textContent = job.title; el.nowSub.textContent = "Queued"; renderSteps(-1);
-      poll();
+      const job = await post(`/api/songs/${song.id}/voice`, body);
+      const passes = 1 + body.harmonies.length + (body.duet_voice ? 1 : 0);
+      el.voiceHint.textContent = `Working — "${job.title}" appears below this player when done (${passes} conversion pass${passes === 1 ? "" : "es"}, about a minute each).`;
+      watchJob(job);
     } catch (error) { el.voiceHint.textContent = error.message; }
     finally { el.voiceBtn.disabled = !state.voices || !state.voices.length; }
   });
@@ -663,18 +1013,37 @@
     try { state.songs = await api("/api/songs"); } catch { return; }
     renderLibrary();
   }
+  function visibleSongs() {
+    const q = state.filters.search.trim().toLowerCase();
+    const me = userName().toLowerCase();
+    return state.songs.filter((song) => {
+      if (state.filters.fav && !song.favorite) return false;
+      if (state.filters.mine && (song.owner || "").toLowerCase() !== me) return false;
+      if (!q) return true;
+      return [song.title, song.style, (song.tags || []).join(" "), song.owner || ""].join(" ").toLowerCase().includes(q);
+    });
+  }
   function renderLibrary() {
     el.songs.innerHTML = "";
+    const songs = visibleSongs();
     el.libraryEmpty.hidden = state.songs.length > 0;
-    el.libraryCount.textContent = state.songs.length ? `${state.songs.length} song${state.songs.length === 1 ? "" : "s"}` : "";
-    for (const song of state.songs) {
+    el.libraryCount.textContent = state.songs.length ? (songs.length === state.songs.length ? `${state.songs.length} song${state.songs.length === 1 ? "" : "s"}` : `${songs.length} of ${state.songs.length}`) : "";
+    for (const song of songs) {
       const li = document.createElement("li");
       li.className = `song${song.id === state.selected ? " active" : ""}`;
       li.innerHTML = `<label class="song-pick" title="Select for comparison"><input type="checkbox"></label><div class="song-icon">♪</div>
         <div class="song-main"><div class="song-title"></div><div class="song-style"></div></div>
-        <div class="song-meta"><div>${fmtTime(song.seconds)}</div><div>${new Date(song.created * 1000).toLocaleDateString()}</div></div>`;
+        <div class="song-meta"><div class="song-badges"></div><div>${fmtTime(song.seconds)}</div><div>${new Date(song.created * 1000).toLocaleDateString()}</div></div>`;
       li.querySelector(".song-title").textContent = song.title;
-      li.querySelector(".song-style").textContent = song.style;
+      li.querySelector(".song-style").textContent = [(song.tags || []).map((t) => `#${t}`).join(" "), song.style].filter(Boolean).join(" · ");
+      const badges = [];
+      if (song.favorite) badges.push(["★", "favourite"]);
+      if (song.rating) badges.push([`${song.rating}/5`, "rating"]);
+      if (song.has_voice) badges.push(["🎤", "has a voice version"]);
+      if (song.has_karaoke) badges.push(["🎶", "lyrics synced"]);
+      if (song.owner) badges.push([song.owner, "queued by"]);
+      li.querySelector(".song-badges").innerHTML = badges.map(() => `<span class="song-badge"></span>`).join("");
+      li.querySelectorAll(".song-badge").forEach((node, i) => { node.textContent = badges[i][0]; node.title = badges[i][1]; });
       const box = li.querySelector("input");
       box.checked = state.compare.has(song.id);
       box.addEventListener("click", (e) => { e.stopPropagation(); box.checked ? state.compare.add(song.id) : state.compare.delete(song.id); updateCompareButton(); });
@@ -682,8 +1051,15 @@
       li.addEventListener("click", () => openSong(song.id).catch((error) => alert(error.message)));
       el.songs.appendChild(li);
     }
+    if (state.songs.length && !songs.length) { const p = document.createElement("li"); p.className = "empty"; p.textContent = "No songs match this filter."; el.songs.appendChild(p); }
     updateCompareButton();
   }
+  el.libSearch.addEventListener("input", () => { state.filters.search = el.libSearch.value; renderLibrary(); });
+  el.libFav.addEventListener("click", () => { state.filters.fav = !state.filters.fav; el.libFav.classList.toggle("on", state.filters.fav); renderLibrary(); });
+  el.libMine.addEventListener("click", () => {
+    if (!userName()) { openSettings(); return; }
+    state.filters.mine = !state.filters.mine; el.libMine.classList.toggle("on", state.filters.mine); renderLibrary();
+  });
   function updateCompareButton() {
     const n = state.compare.size;
     el.compareBtn.hidden = n < 2;
@@ -707,6 +1083,40 @@
     el.compare.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
   el.compareClose.addEventListener("click", () => { el.compare.hidden = true; el.compareGrid.innerHTML = ""; });
+
+  // ── settings (name + notifications) ──────────────────────────────────
+  function renderUserPill() { const name = userName(); el.pillUser.querySelector(".pill-text").textContent = name ? `You: ${name}` : "Who's this?"; }
+  async function openSettings() {
+    el.setName.value = userName();
+    el.settingsHint.textContent = "";
+    try {
+      const s = await api("/api/settings");
+      el.setDiscord.value = s.discord_webhook || ""; el.setTgToken.value = s.telegram_bot_token || ""; el.setTgChat.value = s.telegram_chat_id || "";
+      el.setFailed.checked = s.notify_failed !== false;
+    } catch (error) { el.settingsHint.textContent = error.message; }
+    el.settingsOverlay.hidden = false;
+    el.setName.focus();
+  }
+  el.pillUser.addEventListener("click", openSettings);
+  el.pillSettings.addEventListener("click", openSettings);
+  el.settingsClose.addEventListener("click", () => { el.settingsOverlay.hidden = true; });
+  el.settingsSave.addEventListener("click", async () => {
+    try { localStorage.setItem("mgs.name", el.setName.value.trim().slice(0, 40)); } catch {}
+    renderUserPill();
+    el.settingsSave.disabled = true;
+    try {
+      await put("/api/settings", { discord_webhook: el.setDiscord.value.trim(), telegram_bot_token: el.setTgToken.value.trim(), telegram_chat_id: el.setTgChat.value.trim(), notify_failed: el.setFailed.checked });
+      el.settingsHint.textContent = "Saved.";
+      renderLibrary();
+      setTimeout(() => { el.settingsOverlay.hidden = true; }, 500);
+    } catch (error) { el.settingsHint.textContent = error.message; }
+    finally { el.settingsSave.disabled = false; }
+  });
+  el.settingsTest.addEventListener("click", async () => {
+    el.settingsHint.textContent = "Sending…";
+    try { await put("/api/settings", { discord_webhook: el.setDiscord.value.trim(), telegram_bot_token: el.setTgToken.value.trim(), telegram_chat_id: el.setTgChat.value.trim() }); await post("/api/settings/test", {}); el.settingsHint.textContent = "Test message sent — check Discord / Telegram."; }
+    catch (error) { el.settingsHint.textContent = error.message; }
+  });
 
   // ── share & system overlays ────────────────────────────────────────────
   el.pillShare.addEventListener("click", () => {
@@ -740,12 +1150,13 @@
       ...Object.entries(d.models).map(([name, m]) => [name, m.present ? `${m.size_gb} GB · ${m.path}` : `not downloaded (${m.path})`]),
       ["Cover feature", d.sheetsage2_env && d.models.SheetSage2.present ? "SheetSage2 ready" + (d.ffmpeg ? " · ffmpeg found" : " · no ffmpeg (wav/flac/mp3/ogg still work)") : "SheetSage2 not set up"],
       ["Lyric model", !d.lyrics_model.running ? "Ollama not running" : d.lyrics_model.downloaded ? `${d.lyrics_model.name} ready (Ollama)` : `Ollama running, ${d.lyrics_model.name} not downloaded`],
-      ["Voice conversion", d.voice_conversion.env && d.voice_conversion.seed_vc ? `Seed-VC + Demucs ready · ${d.voice_conversion.voices} reference voice${d.voice_conversion.voices === 1 ? "" : "s"}` : "not set up (see README: Sing it in your voice)"],
+      ["Voice tools", d.voice_conversion.env && d.voice_conversion.seed_vc ? `Seed-VC + Demucs + Whisper (${d.whisper_model}) ready · ${d.voice_conversion.voices} reference voice${d.voice_conversion.voices === 1 ? "" : "s"}` : "not set up (see README: Sing it in your voice)"],
+      ["Notifications", [d.notifications.discord ? "Discord" : null, d.notifications.telegram ? "Telegram" : null].filter(Boolean).join(" + ") || "none configured (Settings)"],
       ["Sharing", (d.cloudflared ? `cloudflared: ${d.cloudflared}` : "cloudflared not found") + (d.share_urls.length ? ` · ${d.share_urls.join(", ")}` : "")],
       ["Storage", `${d.disk_free_gb} GB free · ${d.songs} songs · ${d.plans} plans · ${d.trash} in trash`],
       ["Weights", d.weights ? Object.entries(d.weights).map(([k, v]) => `${k}: ${(v.files && Object.values(v.files)[0] && Object.values(v.files)[0].sha256 || "").slice(0, 12)}…`).join(" · ") : "—"],
     ];
-    $("doctor-list").innerHTML = rows.map(([k, v]) => `<dt></dt><dd></dd>`).join("");
+    $("doctor-list").innerHTML = rows.map(() => `<dt></dt><dd></dd>`).join("");
     const dts = $("doctor-list").querySelectorAll("dt"), dds = $("doctor-list").querySelectorAll("dd");
     rows.forEach(([k, v], i) => { dts[i].textContent = k; dds[i].textContent = v; });
     $("doctor-overlay").hidden = false;
@@ -755,6 +1166,16 @@
 
   // ── boot ───────────────────────────────────────────────────────────────
   restoreDraft();
-  loadLibrary().then(() => { if (state.songs.length && el.result.hidden) openSong(state.songs[0].id, { scroll: false }).catch(() => {}); });
+  renderUserPill();
+  loadPresets();
+  loadVoices().catch(() => {});
+  const wanted = new URLSearchParams(location.search).get("song");
+  loadLibrary().then(() => {
+    const first = wanted && state.songs.some((s) => s.id === wanted) ? wanted : (state.songs[0] || {}).id;
+    if (first && el.result.hidden) openSong(first, { scroll: !!wanted }).catch(() => {});
+  });
   poll();
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
 })();

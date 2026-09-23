@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Music Gen Studio</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+<meta name="theme-color" content="#0d0f13">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Music Gen">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -20,6 +26,8 @@
     <span class="pill" id="pill-model" title="Model state"><span class="dot"></span><span class="pill-text">Connecting…</span></span>
     <span class="pill" id="pill-gpu" title="GPU memory in use (all processes)"><span class="pill-text">GPU —</span></span>
     <button class="pill share" id="pill-share" type="button" hidden title="Click for the address and a QR code"><span class="pill-text"></span></button>
+    <button class="pill" id="pill-user" type="button" title="Your name on the queue and library (Settings)"><span class="pill-text">Who's this?</span></button>
+    <button class="pill" id="pill-settings" type="button" title="Name and notifications"><span class="pill-text">Settings</span></button>
     <button class="pill" id="pill-doctor" type="button" title="Versions, models and hardware"><span class="pill-text">System</span></button>
   </div>
 </header>
@@ -33,6 +41,17 @@
     </div>
 
     <form id="form" autocomplete="off">
+      <details class="advanced describe" id="describe">
+        <summary>Just describe it</summary>
+        <textarea id="describe-text" rows="2" placeholder="e.g. a happy birthday song for my mum — Tagalog, acoustic OPM, warm and a little funny"></textarea>
+        <div class="tools">
+          <button class="btn-mini" id="btn-describe" type="button" title="Draft a title, style and lyrics from the description with the local model, for you to review">Draft it</button>
+          <button class="btn-mini" id="btn-describe-go" type="button" title="Draft it and generate straight away">Draft &amp; generate</button>
+          <label class="sub">then sing it in <select id="describe-voice" title="Automatically sing the finished song in a reference voice"><option value="">the original vocal</option></select></label>
+        </div>
+        <p class="hint" id="describe-hint"></p>
+      </details>
+
       <label class="field">
         <span class="label">Title <em>optional</em></span>
         <input id="title" type="text" placeholder="City Lights" maxlength="80">
@@ -43,6 +62,12 @@
         <textarea id="style" rows="2" placeholder="English, warm piano pop, expressive female voice, acoustic piano, light drums, 88 BPM" required></textarea>
         <span class="hint">Genre, instruments, vocal character, language, tempo.</span>
       </label>
+      <div class="tools preset-tools">
+        <select id="preset-select" title="Style presets"><option value="">presets…</option></select>
+        <button class="btn-mini" id="btn-preset-save" type="button" title="Save the current style as a preset of yours">Save style</button>
+        <button class="btn-mini" id="btn-preset-remove" type="button" title="Remove this preset (yours only)" hidden>Remove</button>
+        <button class="btn-mini" id="btn-styles" type="button" title="Queue this title and lyrics in several styles at once">Try styles…</button>
+      </div>
 
       <label class="field">
         <span class="label">Lyrics</span>
@@ -128,13 +153,14 @@
 
       <details class="advanced" id="cover">
         <summary>Cover a recording</summary>
-        <p class="hint">Upload a song and SheetSage2 transcribes its melody into the score box (chord-free, plan mode “Melody only”). Then write your lyrics and a new style, and generate.</p>
+        <p class="hint">Upload a song: SheetSage2 transcribes its melody into the score box (chord-free, plan mode “Melody only”) and Whisper can write down the words. Then set a new style and generate.</p>
         <input id="cover-file" type="file" accept="audio/*,.wav,.flac,.mp3,.ogg,.m4a,.aac,.opus">
         <div class="row two tight">
           <label class="check"><input id="cover-melody" type="checkbox" checked> melody only (chord-free)</label>
           <button class="btn-ghost" id="btn-transcribe" type="button">Transcribe</button>
         </div>
-        <label class="check" style="margin-bottom:10px"><input id="cover-instrumental" type="checkbox" checked> instrumental cover: fill the lyrics with section tags from the score (no words needed)</label>
+        <label class="check" style="margin-bottom:6px"><input id="cover-instrumental" type="checkbox" checked> instrumental cover: fill the lyrics with section tags from the score (no words needed)</label>
+        <label class="check" style="margin-bottom:10px"><input id="cover-lyrics" type="checkbox"> also transcribe the words with Whisper <input id="cover-language" type="text" maxlength="5" placeholder="lang" class="tiny" title="Whisper language code such as en or tl (blank = auto)"></label>
         <p class="hint" id="cover-hint"></p>
       </details>
 
@@ -193,6 +219,25 @@
       </div>
       <p class="error" id="result-error" hidden></p>
       <audio id="player" controls preload="metadata"></audio>
+      <div class="meta" id="meta-block" hidden>
+        <div class="voice-row">
+          <button class="btn-mini star" id="btn-fav" type="button" title="Favourite">☆</button>
+          <span class="rating" id="rating" title="Rating"></span>
+          <input id="tags" type="text" placeholder="tags, comma separated" class="tags-input" maxlength="200">
+          <span class="sub" id="meta-owner"></span>
+        </div>
+        <textarea id="notes" rows="1" placeholder="Notes about this song (saved automatically)"></textarea>
+        <div class="sub family" id="family" hidden></div>
+      </div>
+      <div class="karaoke" id="karaoke-block" hidden>
+        <div class="voice-row">
+          <button class="btn-mini" id="btn-karaoke" type="button" title="Time the lyrics to the vocal with Whisper (about 15 s) for a follow-along view">Karaoke: sync lyrics</button>
+          <a class="btn-mini" id="dl-lrc" download hidden title="Synced lyrics (LRC) for music players">.lrc</a>
+          <a class="btn-mini" id="dl-srt" download hidden title="Subtitles (SRT) for video editors">.srt</a>
+          <span class="hint" id="karaoke-hint"></span>
+        </div>
+        <div class="lyrics-sync" id="lyrics-sync" hidden></div>
+      </div>
       <div class="alt" id="alt-block" hidden>
         <div class="sub">Legacy decoder (benchmark VAE) version</div>
         <audio id="alt-player" controls preload="metadata"></audio>
@@ -202,16 +247,44 @@
           <span class="sub">Sing it in</span>
           <select id="voice-select" title="A reference voice you uploaded (Voices…)"></select>
           <label class="sub" for="voice-semitones">pitch</label>
-          <select id="voice-semitones" title="Shift the vocal up or down to suit the voice (semitones)"></select>
-          <button class="btn-mini" id="btn-voice" type="button" title="Split the vocal off, re-sing it in this voice with Seed-VC and mix it back (about a minute)">Sing it in this voice</button>
+          <select id="voice-semitones" title="Shift the vocal up or down to suit the voice (semitones), or let it fit the voice's range"></select>
+          <label class="sub" for="voice-harmony">harmonies</label>
+          <select id="voice-harmony" title="Extra copies of the vocal at these intervals, blended under the lead">
+            <option value="">none</option><option value="4">3rd above</option><option value="4,7">3rd + 5th above</option><option value="-5,4">3rd above + 4th below</option><option value="12">octave up</option><option value="-12">octave down</option>
+          </select>
+          <label class="sub" for="voice-duet">duet</label>
+          <select id="voice-duet" title="A second voice for some sections"><option value="">none</option></select>
+          <select id="voice-duet-sections" title="Which sections the duet voice sings (needs the karaoke sync, which runs automatically)"><option value="chorus">on the chorus</option><option value="verse">on the verses</option><option value="bridge">on the bridge</option><option value="alternate">alternating sections</option></select>
+          <button class="btn-mini" id="btn-voice" type="button" title="Split the vocal off, re-sing it in this voice with Seed-VC and mix it back (about a minute per voice)">Sing it in this voice</button>
           <button class="btn-mini" id="btn-voices-manage" type="button" title="Add or remove reference voices">Voices…</button>
         </div>
         <p class="hint" id="voice-hint" hidden></p>
         <div class="voice-versions" id="voice-versions"></div>
       </div>
+      <div class="stems" id="stems-block" hidden>
+        <div class="voice-row">
+          <button class="btn-mini" id="btn-stems" type="button" title="Split into vocals, drums, bass and other with Demucs (about 10 s) — instrumental and acapella included">Split into stems</button>
+          <span class="hint" id="stems-hint"></span>
+        </div>
+        <div class="stem-list" id="stem-list"></div>
+      </div>
+      <div class="export" id="export-block" hidden>
+        <div class="voice-row">
+          <span class="sub">Export</span>
+          <select id="export-source" title="Which version to export"></select>
+          <select id="export-format"><option value="mp3">MP3 320k</option><option value="wav">WAV 16-bit</option><option value="flac">FLAC 24-bit</option></select>
+          <label class="check"><input id="export-master" type="checkbox" checked> master to −14 LUFS</label>
+          <label class="sub">fade out <input id="export-fade" type="number" min="0" max="30" step="0.5" value="2" class="tiny"> s</label>
+          <label class="check"><input id="export-trim" type="checkbox"> trim silence</label>
+          <button class="btn-mini" id="btn-export" type="button">Export</button>
+          <span class="hint" id="export-hint"></span>
+        </div>
+        <div class="export-list" id="export-list"></div>
+      </div>
       <div class="actions">
         <a class="btn-ghost" id="dl-flac" download>Download FLAC</a>
         <a class="btn-ghost" id="dl-wav" download>Download WAV</a>
+        <button class="btn-ghost" id="btn-share-song" type="button" title="A listen-only link for friends (no password needed)">Share</button>
         <button class="btn-ghost" id="btn-new-take" type="button" title="Same request, new seed">New take</button>
         <button class="btn-ghost" id="btn-restyle" type="button" title="Keep this score, change the style prompt">Same score, new style</button>
         <button class="btn-ghost" id="btn-redecode" type="button" title="Re-render the saved latents through the benchmark decoder (~10 s)">Re-decode (legacy)</button>
@@ -235,7 +308,13 @@
     <div class="panel library">
       <div class="panel-head">
         <h2>Library</h2>
-        <div class="library-tools"><span class="sub" id="library-count"></span><button class="btn-mini" id="btn-compare" type="button" hidden>Compare selected</button></div>
+        <div class="library-tools">
+          <input id="lib-search" type="search" placeholder="search title, style, tags" class="lib-search">
+          <button class="btn-mini toggle" id="lib-fav" type="button" title="Favourites only">★</button>
+          <button class="btn-mini toggle" id="lib-mine" type="button" title="Only songs queued under your name">mine</button>
+          <span class="sub" id="library-count"></span>
+          <button class="btn-mini" id="btn-compare" type="button" hidden>Compare selected</button>
+        </div>
       </div>
       <ul class="songs" id="songs"></ul>
       <p class="empty" id="library-empty">Nothing yet — your generated songs will appear here, and they stay in <code>outputs\</code> on disk.</p>
@@ -249,8 +328,41 @@
     <img class="qr" id="share-qr" alt="QR code of the address">
     <div class="share-url mono" id="share-url"></div>
     <div class="actions"><button class="btn-ghost" id="share-copy" type="button">Copy address</button></div>
-    <p class="hint" id="share-note">Scan with the phone camera. If a password is set, the phone asks for it once.</p>
+    <p class="hint" id="share-note">Scan with the phone camera. If a password is set, the phone asks for it once. On the phone, “Add to Home Screen” installs it as an app.</p>
     <ul class="share-list" id="share-list"></ul>
+  </div>
+</div>
+
+<div class="overlay" id="song-share-overlay" hidden>
+  <div class="dialog">
+    <div class="panel-head"><div><h2>Share this song</h2><div class="sub">A listen-only page that works without the password.</div></div><button class="btn-ghost" id="song-share-close" type="button">Close</button></div>
+    <div class="voice-row" style="margin-bottom:10px"><label class="sub">valid for <select id="song-share-days"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="365">a year</option></select></label></div>
+    <img class="qr" id="song-share-qr" alt="QR code of the link">
+    <div class="share-url mono" id="song-share-url"></div>
+    <div class="actions"><button class="btn-ghost" id="song-share-copy" type="button">Copy link</button><a class="btn-ghost" id="song-share-open" target="_blank" rel="noopener">Open</a></div>
+    <p class="hint">Anyone with the link can listen and download until it expires; the link uses the public address when the tunnel is on.</p>
+  </div>
+</div>
+
+<div class="overlay" id="styles-overlay" hidden>
+  <div class="dialog wide">
+    <div class="panel-head"><div><h2>Try several styles</h2><div class="sub">Queues the current title and lyrics once per ticked style — a quick way to hear which genre fits.</div></div><button class="btn-ghost" id="styles-close" type="button">Close</button></div>
+    <ul class="voices styles" id="styles-list"></ul>
+    <div class="actions"><button class="btn-primary slim" id="styles-go" type="button">Generate in these styles</button><span class="hint" id="styles-hint"></span></div>
+  </div>
+</div>
+
+<div class="overlay" id="settings-overlay" hidden>
+  <div class="dialog wide">
+    <div class="panel-head"><div><h2>Settings</h2><div class="sub">Your name for the queue and library, and where to ping you when a song is ready.</div></div><button class="btn-ghost" id="settings-close" type="button">Close</button></div>
+    <label class="field"><span class="label">Your name</span><input id="set-name" type="text" maxlength="40" placeholder="shown on the queue and on songs you make" autocomplete="off"></label>
+    <label class="field"><span class="label">Discord webhook URL</span><input id="set-discord" type="text" placeholder="https://discord.com/api/webhooks/… (Server settings → Integrations → Webhooks)" autocomplete="off"></label>
+    <div class="row two">
+      <label class="field"><span class="label">Telegram bot token</span><input id="set-tg-token" type="text" placeholder="from @BotFather" autocomplete="off"></label>
+      <label class="field"><span class="label">Telegram chat id</span><input id="set-tg-chat" type="text" placeholder="e.g. 987654321" autocomplete="off"></label>
+    </div>
+    <label class="check" style="margin-bottom:12px"><input id="set-failed" type="checkbox" checked> also notify when a job fails</label>
+    <div class="actions"><button class="btn-primary slim" id="settings-save" type="button">Save</button><button class="btn-ghost" id="settings-test" type="button">Send a test message</button><span class="hint" id="settings-hint"></span></div>
   </div>
 </div>
 
