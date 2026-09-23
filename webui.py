@@ -860,9 +860,13 @@ def build_app(engine: Engine, password: str | None = None):
         if not SHEETSAGE_PY.is_file() or not (SHEETSAGE_MODEL / "config.json").is_file():
             raise HTTPException(501, "SheetSage2 is not set up on this PC (see README: Cover a recording).")
         ready()
-        name = re.sub(r"[^A-Za-z0-9._-]+", "-", file.filename or "recording").strip("-.")[:80] or "recording"
-        if Path(name).suffix.lower() not in {".wav", ".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac", ".aiff", ".aif", ".wma", ".webm"}:
-            raise HTTPException(422, "Upload an audio file (wav, flac, mp3, ogg, m4a, ...).")
+        original = Path(file.filename or "recording")
+        suffix = original.suffix.lower()
+        if suffix not in {".wav", ".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac", ".aiff", ".aif", ".wma", ".webm"}:
+            raise HTTPException(422, f"“{original.name}” is not an audio file this app can take — upload wav, flac, mp3 or ogg "
+                                     "(m4a/aac/opus/webm need FFmpeg on the PC).")
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", original.stem).strip("-.")[:70] or "recording"   # keep the extension when shortening
+        name = stem + suffix
         data = await file.read()
         if not data:
             raise HTTPException(422, "The file is empty.")
