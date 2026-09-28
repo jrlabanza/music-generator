@@ -9,10 +9,18 @@ Tested on Ubuntu 26.04, RTX 3070 Laptop 8 GB, NVIDIA driver 595 / CUDA 13.2.
 
 ## One-time setup
 
+One command does everything - driver check, Docker + NVIDIA toolkit, the image,
+the models, a boot test and an app-menu entry. Safe to re-run; it skips what is
+already done and resumes interrupted downloads.
+
 ```bash
-sudo bash linux/install-docker.sh     # Docker Engine + NVIDIA Container Toolkit
-# then log out and back in so the docker group applies
+./linux/initialize.sh                 # essentials
+./linux/initialize.sh --all-models    # every model the project knows about
+./linux/initialize.sh --help          # --no-models --repair --no-test --no-desktop
 ```
+
+On **Windows** the equivalent is `initialize.bat` in the repo root (same flags,
+`-AllModels` style).
 
 ## Run
 
