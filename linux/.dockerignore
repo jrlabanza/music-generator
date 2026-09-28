@@ -1,0 +1,2 @@
+# build context is this directory only; nothing here is large
+.env

@@ -4,3 +4,6 @@
 *.png binary
 *.flac binary
 *.js text eol=lf
+
+# Linux/Docker packaging: shell scripts and Dockerfiles must stay LF
+linux/** text eol=lf
