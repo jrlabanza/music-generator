@@ -37,7 +37,10 @@ grep -q IMPORTFAIL <<< "$out" && fail=1
 
 echo "=== 2/2 boot ==="
 "${COMPOSE[@]}" stop >/dev/null 2>&1
-"${COMPOSE[@]}" up -d "$TOOL" >/dev/null 2>&1 || { echo "  container did not start"; exit 1; }
+# --force-recreate: a reused container keeps its old log, and the previous
+# run's shutdown noise (e.g. "cannot schedule new futures after interpreter
+# shutdown") would be scanned as if it were this boot's error.
+"${COMPOSE[@]}" up -d --force-recreate "$TOOL" >/dev/null 2>&1 || { echo "  container did not start"; exit 1; }
 t0=$(date +%s); code=""
 while (( $(date +%s) - t0 < 300 )); do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$PORT/" 2>/dev/null)
