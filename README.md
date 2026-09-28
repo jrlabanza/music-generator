@@ -2,7 +2,7 @@
 
 Built on [YuE2](https://github.com/multimodal-art-projection/YuE): *frontier music generation with symbolic planning, zero-shot covers, and agentic music editing.* Give it lyrics and a style prompt: it writes a melody-and-chord plan, then realizes that plan as a complete 48 kHz stereo song with vocals and accompaniment — and because the plan is an editable score, you can change the composition and render it again.
 
-Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows**, unquantized, on an **8 GB card** (RTX 4060, *low-VRAM mode*: model halves are swapped through system RAM) or a **16 GB+ card** (*normal mode*: the whole model stays on the GPU), at roughly one minute of compute per minute of audio, and wraps it in a local web app (**Music Gen Studio**). The mode is picked automatically from the detected VRAM.
+Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **Windows and Linux**, unquantized, on an **8 GB card** (RTX 4060, *low-VRAM mode*: model halves are swapped through system RAM) or a **16 GB+ card** (*normal mode*: the whole model stays on the GPU), at roughly one minute of compute per minute of audio, and wraps it in a local web app (**Music Gen Studio**). The mode is picked automatically from the detected VRAM.
 
 ![Music Gen Studio](docs/screenshot.png)
 
@@ -34,15 +34,31 @@ YuE\.venv\Scripts\python.exe download_models.py
 
 The venv lives inside `YuE\` because that is where the launcher and scripts look for it. Install PyTorch from the CUDA index *before* `pip install -e YuE` so the pinned `torch==2.10.0` resolves to the CUDA build.
 
+Or let **`initialize.bat`** do all of the above in one go (it is safe to re-run: finished steps are skipped and downloads resume).
+
+## Setup (Linux)
+
+Requirements: an NVIDIA GPU as above with a working driver (`nvidia-smi`), git, ~40 GB of disk. Everything else — Docker, the NVIDIA Container Toolkit, Python 3.12, CUDA PyTorch, the packages and the model weights — is set up by one script, and the app runs in a container with its own environment so nothing on the host is touched.
+
+```bash
+git clone --recurse-submodules https://github.com/jrlabanza/music-generator.git
+cd music-generator
+./linux/initialize.sh              # first time; --all-models adds SheetSage2, --help for the rest
+```
+
+If Docker was just installed, log out and back in once so the `docker` group applies (the scripts fall back to `sudo` until then). Details, cache location and troubleshooting: [`linux/README.md`](linux/README.md).
+
 ## Use the web app
 
-Double-click **`Start Music Gen Studio.cmd`**, or:
+**Windows:** double-click **`Start Music Gen Studio.cmd`**, or:
 
 ```powershell
 YuE\.venv\Scripts\python.exe webui.py --open
 ```
 
 The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model is loaded into RAM once and kept there).
+
+**Linux:** `./linux/run.sh` (console in this window; Ctrl+C or close it to stop), `./linux/run.sh --background`, or the **AI – YuE 2** app-menu entry the initializer added. The page is at **http://127.0.0.1:7863** on Linux — 7860 is left to the image generator so both can be installed side by side.
 
 - **Compose** — style prompt (genre, instruments, vocal, language, tempo), lyrics with `[Verse]`/`[Chorus]` tags, plan mode, seed. *Load example* fills in the upstream song. `Ctrl+Enter` generates.
 - **Progress** — each stage live (plan score → semantic tokens → synthesize → decode) with tokens/s and an audio-length estimate, a *Cancel* button, and a queue for further requests.
@@ -83,6 +99,7 @@ Only one PC needs the GPU. Start the app with **`Start Music Gen Studio (share o
 
 - There is **no login**: anyone on the network can generate, cancel the running job, and download every song. Keep it to networks you trust and never port-forward it to the internet.
 - If a friend cannot connect although the rule exists, the network itself may isolate clients (common on guest/corporate Wi-Fi), or the PC's address changed — check the pill for the current one.
+- **Linux:** put `AI_BIND=0.0.0.0` in `linux/.env` and start with `./linux/run.sh`; it then listens on every interface (port 7863). Open the port in your firewall if one is active, e.g. `sudo ufw allow 7863/tcp`.
 
 ### Use it from anywhere (phone, away from home)
 
