@@ -1262,6 +1262,12 @@ def main():
         sys.exit("--tunnel publishes the app on the internet: set --password (or --password-file / MUSICGEN_PASSWORD) first.")
     if args.share:
         args.host = "0.0.0.0"
+    port = free_port(args.host, args.port)
+    if port is None:
+        sys.exit(f"Ports {args.port}-{args.port + 19} are all in use; pass --port with a free one.")
+    if port != args.port:
+        print(f"\n  Port {args.port} is already in use by another program -> using port {port} instead", file=sys.stderr)
+        args.port = port
     engine = Engine(args)
     if args.tunnel:
         exe = find_cloudflared(args.cloudflared)
@@ -1672,6 +1678,20 @@ def keep_awake():
     if ok:
         threading.Thread(target=hold, name="keep-awake", daemon=True).start()
     return ok
+
+
+def free_port(host, port, tries=20):
+    """The first port from `port` upward that can be bound on host, or None. (On Windows a port
+    another program listens on fails to bind with error 10048, so the app moves on instead of dying.)"""
+    import socket
+    for candidate in range(port, port + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((host, candidate))
+                return candidate
+            except OSError:
+                continue
+    return None
 
 
 def lan_addresses():

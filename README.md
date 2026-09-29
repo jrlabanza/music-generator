@@ -87,7 +87,7 @@ On Linux the voice tools (Export to MP3, stems, karaoke sync, *Voices…*) and t
 - **System** (header pill) — versions, GPU, model files and their hashes, storage, whether the cover feature, the lyric model, the voice tools and notifications are ready.
 - **Library** — every song in `outputs/`, newest first. Each folder keeps `audio.flac`, `score.abc`, `plan.json`, `semantic.npy`, `latent.npy`, `request.json`, `result.json`. *Delete* moves a song's folder to `trash/` (restore by moving it back into `outputs/`; empty `trash/` by hand to reclaim disk). It works while the song is loaded in players — files are served from memory so the server never pins them — and if some other program holds a file open, the song is hidden at once and moved as soon as the file is released.
 
-Flags: `--vram low|normal|auto` (see below), `--share` to let other devices on your network use it (below), `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps. The GPU is only used while a song is generating.
+Flags: `--vram low|normal|auto` (see below), `--share` to let other devices on your network use it (below), `--quantization fp8` for an even smaller GPU footprint (slower: eager decoding), `--gpu-reserve-gib 1.5` if you close other GPU apps, `--port` (default 7860; if that port is already taken by another program the app moves to the next free one automatically and prints the address it chose). The GPU is only used while a song is generating.
 
 ### Share on your network
 
