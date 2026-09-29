@@ -35,6 +35,15 @@ grep -q "^torch $WANT_TORCH" <<< "$out"  || { echo "  >> WRONG TORCH"; fail=1; }
 grep -q "^cuda_available True" <<< "$out" || { echo "  >> CUDA NOT AVAILABLE"; fail=1; }
 grep -q IMPORTFAIL <<< "$out" && fail=1
 
+echo "=== 1b/2 helper environments (voice + SheetSage2) ==="
+out=$("${DK[@]}" run --rm --entrypoint bash "ai/$TOOL:latest" -c '
+/opt/venv-voice/bin/python -c "import torch, torchaudio, demucs, lameenc, pyloudnorm, mutagen, transformers; print(\"voice ok torch\", torch.__version__)" 2>&1 || echo IMPORTFAIL voice
+/opt/venv-sheetsage2/bin/python -c "import torch, transformers, mir_eval, pretty_midi; print(\"sheetsage ok torch\", torch.__version__)" 2>&1 || echo IMPORTFAIL sheetsage
+' 2>&1); echo "$out" | sed 's/^/  /'
+grep -q "^voice ok torch 2.8.0" <<< "$out"     || { echo "  >> VOICE ENV BROKEN"; fail=1; }
+grep -q "^sheetsage ok torch 2.8.0" <<< "$out" || { echo "  >> SHEETSAGE ENV BROKEN"; fail=1; }
+grep -q IMPORTFAIL <<< "$out" && fail=1
+
 echo "=== 2/2 boot ==="
 "${COMPOSE[@]}" stop >/dev/null 2>&1
 # --force-recreate: a reused container keeps its old log, and the previous

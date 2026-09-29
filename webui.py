@@ -46,11 +46,22 @@ TRANSCRIPTIONS = HERE / "transcriptions"
 EXAMPLES = REPO / "examples"
 ABC_TOOLS = REPO / "skills" / "yue2-music" / "scripts" / "abc_tools.py"
 LEGACY_VAE = MODELS / "YuE2-Vae-legacy"
-SHEETSAGE_PY = HERE / ".venv-sheetsage2" / "Scripts" / "python.exe"
+
+
+def venv_python(name, env_var):
+    """Interpreter of a helper environment: the env_var override (the Linux container sets it),
+    else <repo>/<name>/Scripts/python.exe on Windows or <repo>/<name>/bin/python elsewhere."""
+    override = os.environ.get(env_var)
+    if override:
+        return Path(override)
+    return HERE / name / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
+
+SHEETSAGE_PY = venv_python(".venv-sheetsage2", "MUSICGEN_SHEETSAGE_PY")
 SHEETSAGE_MODEL = MODELS / "SheetSage2"
 MAX_UPLOAD_BYTES = 200 * 2**20
 VOICES = HERE / "voices"                # reference recordings for voice conversion (personal; never in git)
-VOICE_PY = HERE / ".venv-voice" / "Scripts" / "python.exe"
+VOICE_PY = venv_python(".venv-voice", "MUSICGEN_VOICE_PY")
 SEEDVC_DIR = HERE / "tools" / "seed-vc"
 VOICE_SUFFIXES = {".wav", ".flac", ".mp3", ".ogg"}
 

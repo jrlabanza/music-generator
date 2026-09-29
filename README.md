@@ -60,6 +60,8 @@ The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model 
 
 **Linux:** `./linux/run.sh` (console in this window; Ctrl+C or close it to stop), `./linux/run.sh --background`, or the **AI – YuE 2** app-menu entry the initializer added. The page is at **http://127.0.0.1:7863** on Linux — 7860 is left to the image generator so both can be installed side by side.
 
+On Linux the voice tools (Export to MP3, stems, karaoke sync, *Voices…*) and the cover feature need no extra setup: the two helper environments described below for Windows are part of the container image, and `linux/initialize.sh` fetches the Seed-VC code (`--all-models` adds the SheetSage2 transcriber and the legacy VAE).
+
 - **Compose** — style prompt (genre, instruments, vocal, language, tempo), lyrics with `[Verse]`/`[Chorus]` tags, plan mode, seed. *Load example* fills in the upstream song. `Ctrl+Enter` generates.
 - **Progress** — each stage live (plan score → semantic tokens → synthesize → decode) with tokens/s and an audio-length estimate, a *Cancel* button, and a queue for further requests.
 - **Result** — plays in the page; FLAC/WAV downloads; the generated score as sheet music (abcjs, bundled) or ABC text; *Load into composer* to remix; *Edit score* to change harmony or melody and re-render — the white-box editing flow from the upstream docs.
@@ -141,7 +143,7 @@ Voice conversion runs in its own environment too (Seed-VC pins older `transforme
 ```powershell
 py -3.11 -m venv .venv-voice
 .venv-voice\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
-.venv-voice\Scripts\python.exe -m pip install scipy==1.13.1 librosa==0.10.2 "huggingface-hub>=0.28.1" munch==4.0.0 einops==0.8.0 descript-audio-codec==1.0.0 pydub==0.25.1 transformers==4.46.3 soundfile numpy==1.26.4 hydra-core==1.3.2 pyyaml python-dotenv demucs mutagen
+.venv-voice\Scripts\python.exe -m pip install scipy==1.13.1 librosa==0.10.2 "huggingface-hub>=0.28.1" munch==4.0.0 einops==0.8.0 descript-audio-codec==1.0.0 pydub==0.25.1 transformers==4.46.3 soundfile numpy==1.26.4 hydra-core==1.3.2 pyyaml python-dotenv demucs mutagen lameenc pyloudnorm
 git clone https://github.com/Plachtaa/seed-vc tools\seed-vc
 ```
 
@@ -165,6 +167,14 @@ YuE\.venv\Scripts\python.exe run_lowvram.py --request my-song.json --cot melody 
 ```
 
 `--cot full|melody|off`, `--abc-file` (needs `full` or `melody`), `--seed`, `--cfg-scale`, `--vram low|normal|auto`, `--quantization fp8`. Output directories must be fresh. See `YuE/docs/` for the upstream generation, editing and cover guides.
+
+**Linux:** the same commands run inside the container through `linux/cli.sh`, which stands in for `YuE\.venv\Scripts\python.exe`; `voice` and `sheetsage` in front pick the helper environments:
+
+```bash
+./linux/cli.sh python run_lowvram.py --request songs/my-song.json --output outputs/my-song
+./linux/cli.sh voice python export_audio.py --song outputs/my-song/audio.flac --output outputs/my-song --format mp3 --lufs -14
+./linux/cli.sh sheetsage python sheetsage_transcribe.py uploads/song.mp3 --output transcriptions/song
+```
 
 ## VRAM modes
 

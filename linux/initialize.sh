@@ -12,8 +12,8 @@
 #   ./initialize.sh --civitai-token KEY   (Forge: for Civitai downloads; or put it
 #                                          in tools/civitai_token.txt / $CIVITAI_TOKEN)
 #
-# Steps: 1 GPU driver  2 Docker + NVIDIA toolkit  3 image  4 prerequisites
-#        5 boot test  6 app-menu entry
+# Steps: 1 GPU driver  2 Docker + NVIDIA toolkit  3 image  4 models (verified)
+#        4b Seed-VC code  5 boot test  6 app-menu entry
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 TOOL="yue2"; SVC="yue2"
@@ -60,15 +60,56 @@ if (( REPAIR )) || ! "${DK[@]}" image inspect "ai/$TOOL:latest" >/dev/null 2>&1;
   "${COMPOSE[@]}" build || fail "image build failed"
 else ok "present ($("${DK[@]}" image inspect "ai/$TOOL:latest" --format '{{.Size}}' | awk '{printf "%.1f GB", $1/1e9}'))"; fi
 # run a python one-liner inside the tool's environment, repo mounted at /app
-inpy(){ "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint /opt/venv/bin/python "$SVC" "$@"; }
+# via the entrypoint, so PYTHONPATH and the helper-env overrides are set
+inpy(){ "${COMPOSE[@]}" run --rm --no-deps -T "$SVC" python "$@"; }
 
 say 4/6 "Prerequisites ($MODELS)"
 if [[ $MODELS == none ]]; then ok "skipped (--no-models)"; else
   # YuE2-3B + YuE2-Vae into models/ (download_models.py resumes and verifies).
   # --all-models adds the SheetSage2 cover-feature encoder (2.6 GB).
-  extra=(); [[ $MODELS == all ]] && extra=(--sheetsage2)
-  if [[ -d $ROOT/models/YuE2-3B && -d $ROOT/models/YuE2-Vae && ${#extra[@]} -eq 0 ]]; then ok "YuE2-3B and YuE2-Vae present"
-  else inpy /app/download_models.py "${extra[@]}" || fail "model download failed"; ok "models ready"; fi
+  extra=(); [[ $MODELS == all ]] && extra=(--sheetsage2 --legacy-vae)
+  # Every weights file is checked against its weights_manifest.json sha256, like
+  # initialize.py does on Windows - and a mismatch (a bad copy, an interrupted
+  # download) is repaired here rather than reported: the file is removed and
+  # fetched again.
+  verify='
+import json, sys
+from pathlib import Path
+from yue2.storage import model_identity
+bad = []
+for name in ("YuE2-3B", "YuE2-Vae"):
+    folder = Path("/app/models") / name
+    try:
+        model_identity(folder)
+    except FileNotFoundError:
+        bad.append(name + ": missing")
+    except ValueError as exc:
+        manifest = json.loads((folder / "weights_manifest.json").read_text())
+        for f in folder.glob("*.safetensors"):
+            f.unlink()
+            for meta in (folder / ".cache/huggingface/download").glob(f.name + ".metadata"):
+                meta.unlink()
+        bad.append(f"{name}: {exc} - removed, will download again")
+print("\n".join(bad)); sys.exit(1 if bad else 0)
+'
+  for attempt in 1 2; do
+    if [[ -d $ROOT/models/YuE2-3B && -d $ROOT/models/YuE2-Vae ]] && inpy -c "$verify" 2>/dev/null | sed 's/^/      /'; then
+      [[ ${#extra[@]} -eq 0 ]] && { ok "YuE2-3B and YuE2-Vae present and verified"; break; }
+    fi
+    (( attempt == 1 )) || fail "the model weights still fail their sha256 check after a fresh download"
+    inpy /app/download_models.py "${extra[@]}" || fail "model download failed"; ok "models downloaded"
+  done
+fi
+
+say 4b/6 "Voice conversion engine (Seed-VC)"
+# The README's "git clone https://github.com/Plachtaa/seed-vc tools\seed-vc": its
+# Python environment is already in the image, only the code is needed here.
+if [[ -f $ROOT/tools/seed-vc/inference.py ]]; then ok "tools/seed-vc present"
+else
+  mkdir -p "$ROOT/tools"
+  git clone --depth 1 https://github.com/Plachtaa/seed-vc "$ROOT/tools/seed-vc" 2>&1 | tail -1 | sed 's/^/      /' \
+    && ok "cloned into tools/seed-vc (checkpoints download on the first conversion)" \
+    || bad "could not clone seed-vc (no network?) - Voices… stays disabled until you re-run this"
 fi
 
 say 5/6 "Boot test"
