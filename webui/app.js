@@ -1164,6 +1164,31 @@
   $("doctor-close").addEventListener("click", () => { $("doctor-overlay").hidden = true; });
   document.querySelectorAll(".overlay").forEach((o) => o.addEventListener("click", (e) => { if (e.target === o) o.hidden = true; }));
 
+  // ── theme ──────────────────────────────────────────────────────────────
+  // Light is the default; html[data-theme="dark"] switches to dark. With nothing saved the attribute stays off so the
+  // stylesheet may follow prefers-color-scheme. Inside the hub the bridge owns data-theme, so the saved value is left alone.
+  const THEME_KEY = "mgs_theme";
+  const root = document.documentElement;
+  function applyTheme(theme) {
+    root.dataset.theme = theme;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0B1B3B" : "#FFFFFF");
+  }
+  function currentTheme() {
+    if (root.dataset.theme) return root.dataset.theme;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  if (!root.dataset.hubTheme) {
+    let saved = null;
+    try { saved = localStorage.getItem(THEME_KEY); } catch {}
+    if (saved === "dark" || saved === "light") applyTheme(saved);
+  }
+  $("btn-theme").addEventListener("click", () => {
+    const next = currentTheme() === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try { localStorage.setItem(THEME_KEY, next); } catch {}
+  });
+
   // ── boot ───────────────────────────────────────────────────────────────
   restoreDraft();
   renderUserPill();
