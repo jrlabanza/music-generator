@@ -6,6 +6,8 @@ Upstream targets **Linux, Python 3.12 and a 24 GB GPU**. This repo runs it on **
 
 ![Music Gen Studio](docs/screenshot.png)
 
+It is the **Music Studio** of [AI Studio Hub](https://github.com/jrlabanza/ai-studio-hub), which runs it next to the other local AI tools and shares one GPU between them.
+
 | File | What |
 |---|---|
 | `webui.py` + `webui/` | Local web app: compose, live stage progress, cancel/queue, in-page playback, score rendered as sheet music, edit-and-re-render, library of past songs |
