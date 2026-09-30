@@ -1172,7 +1172,7 @@
   function applyTheme(theme) {
     root.dataset.theme = theme;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", theme === "dark" ? "#0B1B3B" : "#FFFFFF");
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#141416" : "#FFFFFF");
   }
   function currentTheme() {
     if (root.dataset.theme) return root.dataset.theme;
