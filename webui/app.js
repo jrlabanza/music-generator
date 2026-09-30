@@ -402,9 +402,19 @@
     showInfo("Sections applied — press Check to validate.");
   });
 
+  // A file handed over by the AI Studio Hub ("Send to…") goes into the same <input type=file> a picked file
+  // would, so the existing handlers see it. If the browser refuses the assignment it is kept aside instead.
+  const handedFiles = new Map();
+  function setPickedFile(input, file) {
+    handedFiles.delete(input);
+    try { const dt = new DataTransfer(); if (file) dt.items.add(file); input.files = dt.files; }
+    catch { input.value = ""; if (file) handedFiles.set(input, file); }
+  }
+  function pickedFile(input) { return input.files[0] || handedFiles.get(input) || null; }
+
   // cover: upload a recording for transcription
   el.transcribe.addEventListener("click", async () => {
-    const file = el.coverFile.files[0];
+    const file = pickedFile(el.coverFile);
     if (!file) { el.coverHint.textContent = "Choose an audio file first."; return; }
     const data = new FormData();
     data.append("file", file); data.append("melody_only", el.coverMelody.checked ? "true" : "false"); data.append("title", file.name.replace(/\.[^.]+$/, ""));
@@ -993,14 +1003,14 @@
   el.voicesManage.addEventListener("click", async () => { el.voicesOverlay.hidden = false; await loadVoices(); });
   el.voicesClose.addEventListener("click", () => { el.voicesOverlay.hidden = true; });
   el.voiceUpload.addEventListener("click", async () => {
-    const file = el.voiceFile.files[0];
+    const file = pickedFile(el.voiceFile);
     if (!file) { el.voicesHint.textContent = "Choose a recording first (wav, flac, mp3 or ogg)."; return; }
     const data = new FormData();
     data.append("file", file); data.append("name", el.voiceName.value.trim());
     el.voiceUpload.disabled = true; el.voicesHint.textContent = "Uploading…";
     try {
       const reply = await api("/api/voices", { method: "POST", body: data });
-      el.voiceFile.value = ""; el.voiceName.value = "";
+      setPickedFile(el.voiceFile, null); el.voiceName.value = "";
       await loadVoices();
       el.voiceSelect.value = reply.voice.name;
       el.voicesHint.textContent = `Added "${reply.voice.name}" (${fmtTime(reply.voice.seconds)}). Close this and press "Sing it in this voice" on any song.`;
@@ -1203,4 +1213,30 @@
   if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
+
+  // ── "Send to" from the AI Studio Hub ───────────────────────────────────
+  // The hub bridge (only present inside the hub) calls this with a file from another studio's library.
+  // Slots: "voice" = a reference recording for "Sing it in this voice" (lands in the Voices… dialog, ready to
+  // name and add); "cover" = a recording for "Cover a recording" (lands in the file box; nothing starts).
+  window.hubImportSlots = ["voice", "cover"];
+  window.hubImport = async (detail) => {
+    if (!window.hubImportSlots.includes(detail.slot)) return { ok: false, message: `Unknown slot "${detail.slot}"` };
+    const file = await window.hubImportFetch(detail);
+    const stem = (file.name || "recording").replace(/\.[^.]+$/, "");
+    const from = detail.from && detail.from.name ? ` from ${detail.from.name}` : "";
+    if (detail.slot === "voice") {
+      el.voicesOverlay.hidden = false;
+      await loadVoices();
+      setPickedFile(el.voiceFile, file);
+      if (!el.voiceName.value.trim()) el.voiceName.value = stem.replace(/[^\w .-]+/g, " ").trim().slice(0, 40);
+      el.voicesHint.textContent = `"${file.name}"${from} is ready — name it and press "Add voice".`;
+      el.voiceName.focus(); el.voiceName.select();
+      return { ok: true, message: "Recording loaded — name the voice and press Add voice" };
+    }
+    setPickedFile(el.coverFile, file);
+    el.cover.open = true; el.advanced.open = true;
+    el.coverHint.textContent = `"${file.name}"${from} is ready — press Transcribe to cover it.`;
+    el.cover.scrollIntoView({ behavior: "smooth", block: "center" });
+    return { ok: true, message: "Recording loaded — press Transcribe when ready" };
+  };
 })();

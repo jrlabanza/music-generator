@@ -14,6 +14,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/outputs/") || url.pathname.startsWith("/s/") || url.pathname === "/login") return;
+  if (url.pathname.startsWith("/__hub/")) return;   // the AI Studio Hub's bridge, brand and "Send to" media: always straight to the network
   // network first, cache as fallback, so updates show up immediately when online
   event.respondWith(fetch(event.request).then((response) => {
     if (response.ok && (SHELL.includes(url.pathname) || url.pathname.startsWith("/static/"))) {
