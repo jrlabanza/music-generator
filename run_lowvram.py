@@ -31,6 +31,11 @@ leak:
   * The VAE's legacy weight_norm leaves 254 MiB of computed weights on the
     GPU after .to("cpu"); they are released after each decode.
 
+On AMD (PyTorch-on-ROCm, ``.gpu.json`` says ``"backend": "rocm"`` or ``torch.version.hip`` is set)
+``torch.cuda.*`` keeps working, so the placement above is unchanged; CUDA graphs and the flash/cuDNN
+attention entrypoints do not exist there, so the decoder runs the eager path (``backend="torch-eager"``,
+the one fp8 already uses) and ``--quantization fp8`` is switched off except on RDNA 4 (gfx12).
+
 Nothing in the upstream checkout is modified; everything is patched in here.
 
     python run_lowvram.py --output outputs/first-song
@@ -52,6 +57,46 @@ import torch.nn.functional as F
 HERE = Path(__file__).resolve().parent
 REPO = HERE / "YuE"
 MODELS = HERE / "models"
+GPU_JSON = HERE / ".gpu.json"
+
+
+# ── GPU backend: cuda (NVIDIA), rocm (AMD) or cpu ──────────────────────────────
+def gpu_backend():
+    """What the initialiser set up (.gpu.json, docs/gpu.md), else what this torch build says."""
+    try:
+        backend = json.loads(GPU_JSON.read_text(encoding="utf-8")).get("backend")
+        if backend in ("cuda", "rocm", "cpu"):
+            return backend
+    except (OSError, ValueError, AttributeError):
+        pass
+    if getattr(torch.version, "hip", None):
+        return "rocm"
+    return "cuda" if torch.version.cuda else "cpu"
+
+
+def gpu_gfx():
+    """AMD only: the LLVM target of the card ('gfx1201'), from .gpu.json or the device properties; '' elsewhere."""
+    try:
+        gfx = json.loads(GPU_JSON.read_text(encoding="utf-8")).get("gfx")
+        if gfx:
+            return str(gfx)
+    except (OSError, ValueError, AttributeError):
+        pass
+    if BACKEND == "rocm" and torch.cuda.is_available():
+        return str(getattr(torch.cuda.get_device_properties(0), "gcnArchName", "") or "").split(":")[0]
+    return ""
+
+
+BACKEND = gpu_backend()
+
+
+def effective_quantization(quantization):
+    """fp8 stays as asked on NVIDIA; on ROCm it needs RDNA 4 (gfx12) and is switched off elsewhere."""
+    if quantization == "fp8" and BACKEND == "rocm" and not gpu_gfx().startswith("gfx12"):
+        print(f"[lowvram] --quantization fp8 is not available on ROCm before RDNA 4 ({gpu_gfx() or 'unknown gfx'}): "
+              "using none", file=sys.stderr)
+        return "none"
+    return quantization
 
 # ── 0. Text encoding on Windows ────────────────────────────────────────────────
 # Upstream writes its JSON artifacts with the platform default encoding (cp1252
@@ -354,13 +399,17 @@ def make_pipeline(model, vae, *, vram="auto", quantization="none", gpu_reserve_g
     ``bases`` are extra mixins placed in front of the pipeline class."""
     global GRAPH_ATTENTION
     GRAPH_ATTENTION = graph_attention
+    quantization = effective_quantization(quantization)
     mode = resolve_vram_mode(vram)
     cls = pipeline_class(mode)
     if bases:
         cls = type(cls.__name__, (*bases, cls), {})
     budget = 8 if mode == "low" else max(8.0, float(round(gpu_total_gib())))
+    # "torch" is the CUDA-graph decoder (StaticGraphAR above); "torch-eager" the plain loop, which fp8
+    # already needs and which is the only one ROCm has (no CUDA graphs, no flash/cuDNN entrypoints).
+    eager = quantization == "fp8" or BACKEND == "rocm"
     return cls.from_pretrained(model, vae=vae, device="cuda", memory_budget_gib=budget,
-                               backend="torch-eager" if quantization == "fp8" else "torch",
+                               backend="torch-eager" if eager else "torch",
                                quantization=quantization, gpu_reserve_gib=gpu_reserve_gib, **kwargs)
 
 
@@ -412,7 +461,7 @@ def main():
         parser.error("A supplied score requires full or melody mode.")
 
     mode = resolve_vram_mode(args.vram)
-    print(f"[lowvram] GPU {gpu_total_gib():.1f} GiB -> {mode} VRAM mode", file=sys.stderr)
+    print(f"[lowvram] GPU {gpu_total_gib():.1f} GiB ({BACKEND}) -> {mode} VRAM mode", file=sys.stderr)
     with make_pipeline(args.model, vae=args.vae, vram=mode, quantization=args.quantization,
                        gpu_reserve_gib=args.gpu_reserve_gib, graph_attention=args.graph_attention) as pipe:
         song = pipe(**request)

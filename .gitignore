@@ -21,13 +21,16 @@ password.txt
 public_url.txt
 # deleted songs (restore by moving a folder back into outputs/)
 trash/
-# app data / local tools
+# app data / local tools (tools/gpu_detect.py is part of the repo)
 plans/
 uploads/
 transcriptions/
 logs/
-tools/
+tools/*
+!tools/gpu_detect.py
 voices/
 settings.json
 presets.json
 .share_secret
+# which GPU setup ran for (written by initialize.py / linux/initialize.sh)
+.gpu.json

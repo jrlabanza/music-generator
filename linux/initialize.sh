@@ -32,9 +32,16 @@ ok(){ printf '      %s\n' "$*"; }
 bad(){ printf '      \033[31m%s\033[0m\n' "$*"; }
 fail(){ bad "$*"; echo; echo "Setup did not complete. Fix the error above and run initialize.sh again."; exit 1; }
 
-say 1/6 "NVIDIA driver"
+say 1/6 "GPU driver"
 if command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=name,driver_version --format=csv,noheader >/dev/null 2>&1; then
   ok "$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader | head -1)"
+elif command -v rocm-smi >/dev/null || command -v amd-smi >/dev/null \
+     || grep -qis '^0x1002$' /sys/class/drm/card*/device/vendor 2>/dev/null; then
+  # AMD Radeon on Linux: the container is CUDA-only for now (nvidia/cuda base image, NVIDIA runtime).
+  bad "an AMD Radeon card was found, but Music Gen Studio's Linux container is CUDA-only for now."
+  bad "AMD is handled on Windows (initialize.bat installs AMD's PyTorch-on-ROCm wheels); the Linux"
+  bad "ROCm image is on the list - see README.md 'GPU support' and the AI Studio Hub's docs/gpu.md."
+  fail "no NVIDIA driver (nvidia-smi); an AMD card cannot run this container yet"
 else
   fail "no working NVIDIA driver (nvidia-smi). Install the driver first: sudo ubuntu-drivers install"
 fi
@@ -62,6 +69,11 @@ else ok "present ($("${DK[@]}" image inspect "ai/$TOOL:latest" --format '{{.Size
 # run a python one-liner inside the tool's environment, repo mounted at /app
 # via the entrypoint, so PYTHONPATH and the helper-env overrides are set
 inpy(){ "${COMPOSE[@]}" run --rm --no-deps -T "$SVC" python "$@"; }
+# Record the card and the torch build the image carries in .gpu.json (the hub's
+# shared GPU contract, docs/gpu.md): the check-up page and the app read it.
+if inpy /app/tools/gpu_detect.py --write /app/.gpu.json >/dev/null 2>&1 && [[ -f $ROOT/.gpu.json ]]; then
+  ok ".gpu.json: $(tr -d '\n' < "$ROOT/.gpu.json" | cut -c1-110)"
+else bad "could not write .gpu.json (the app falls back to runtime detection)"; fi
 
 say 4/6 "Prerequisites ($MODELS)"
 if [[ $MODELS == none ]]; then ok "skipped (--no-models)"; else

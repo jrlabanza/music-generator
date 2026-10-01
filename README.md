@@ -21,7 +21,7 @@ It is the **Music Studio** of [AI Studio Hub](https://github.com/jrlabanza/ai-st
 
 ## Setup (Windows)
 
-Requirements: an NVIDIA GPU with BF16 support and at least 8 GB VRAM (compute capability ≥ 8.0; FP8 mode needs ≥ 8.9), a recent driver, Python 3.10+ (`py -3.11` below), git, ~15 GB of disk, and enough RAM to hold the model between songs (16 GB works, 32 GB+ is comfortable in low-VRAM mode, which keeps most of the model in RAM).
+Requirements: an NVIDIA GPU with BF16 support and at least 8 GB VRAM (compute capability ≥ 8.0; FP8 mode needs ≥ 8.9) or an AMD Radeon from the list under [GPU support](#gpu-support), a recent driver, Python 3.10+ (`py -3.11` below; 3.11+ on AMD), git, ~15 GB of disk, and enough RAM to hold the model between songs (16 GB works, 32 GB+ is comfortable in low-VRAM mode, which keeps most of the model in RAM).
 
 ```powershell
 git clone --recurse-submodules https://github.com/jrlabanza/music-generator.git
@@ -36,7 +36,7 @@ YuE\.venv\Scripts\python.exe download_models.py
 
 The venv lives inside `YuE\` because that is where the launcher and scripts look for it. Install PyTorch from the CUDA index *before* `pip install -e YuE` so the pinned `torch==2.10.0` resolves to the CUDA build.
 
-Or let **`initialize.bat`** do all of the above in one go (it is safe to re-run: finished steps are skipped and downloads resume).
+Or let **`initialize.bat`** do all of the above in one go (it is safe to re-run: finished steps are skipped and downloads resume). It detects the graphics card first and picks the PyTorch build for it - the commands above are the NVIDIA case; on AMD it installs AMD's ROCm wheels instead (see [GPU support](#gpu-support)).
 
 ## Setup (Linux)
 
@@ -177,6 +177,20 @@ YuE\.venv\Scripts\python.exe run_lowvram.py --request my-song.json --cot melody 
 ./linux/cli.sh voice python export_audio.py --song outputs/my-song/audio.flac --output outputs/my-song --format mp3 --lufs -14
 ./linux/cli.sh sheetsage python sheetsage_transcribe.py uploads/song.mp3 --output transcriptions/song
 ```
+
+## GPU support
+
+The setup scripts follow the AI Studio Hub's shared GPU contract (`tools/gpu_detect.py`, a stdlib-only port of the hub's `docs/gpu-detect.ps1`): detect the card once, install the matching PyTorch build, write **`.gpu.json`** next to this README (`vendor`, `backend`, `gfx`, `vram_mb`, the installed `torch`), and switch off what the other vendor does not have. The app reads `.gpu.json` at start and falls back to `torch.version.hip` / `torch.version.cuda` when it is missing.
+
+| | status |
+|---|---|
+| **NVIDIA**, Windows and Linux | tested - CUDA PyTorch (`torch==2.10.0+cu128` as pinned), CUDA-graph decoder, `--quantization fp8` on compute capability 8.9+ |
+| **AMD**, Windows | implemented, **awaiting verification on AMD hardware** - AMD's native PyTorch-on-ROCm wheels (`torch 2.12.0+rocm7.14.1` from `repo.amd.com`, Python 3.11+, AMD Software Adrenalin 26.x). RX 7000 / RX 9000, PRO W7000, RX 6800 and up, and the Ryzen AI iGPUs (780M/880M/890M/8060S) map to their `gfx` target; other Radeons get the `device-all` build, and RX 6600 and older / RX 5000 / Vega are not in the wheels (CPU build, no generation). |
+| **AMD**, Linux | not yet: `linux/initialize.sh` says so and stops - the container is built on `nvidia/cuda` |
+
+On AMD the ROCm torch replaces YuE's `torch==2.10.0` pin (AMD ships one torch per ROCm release), so `initialize.py` installs YuE with `--no-deps` and the rest with torch constrained to the installed build; `pip check` reports that one deliberate mismatch. There is no fp8 and no CUDA-graph decoder on ROCm: `--quantization` is forced to `none` (except on RDNA 4, gfx12) and the eager decoder runs, which is slower per token but the same low-VRAM placement. flash-attn, triton and the vllm "fast" extra are never installed.
+
+To override the detection: `initialize.bat --gpu nvidia|amd|cpu` (also `--gfx gfx1100` for the AMD target); `--cuda cu126` still picks another CUDA build on NVIDIA.
 
 ## VRAM modes
 

@@ -35,7 +35,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from run_lowvram import HERE, MODELS, REPO, VRAM_MODES, gpu_total_gib, make_pipeline, resolve_vram_mode
+from run_lowvram import (BACKEND, HERE, MODELS, REPO, VRAM_MODES, effective_quantization, gpu_total_gib, make_pipeline,
+                         resolve_vram_mode)
 
 WEB = HERE / "webui"
 OUTPUTS = HERE / "outputs"
@@ -255,6 +256,8 @@ class Engine:
     def __init__(self, args):
         self.args = args
         self.pipe = None
+        self.backend = BACKEND                                  # cuda (NVIDIA), rocm (AMD) or cpu
+        args.quantization = effective_quantization(args.quantization)   # fp8 is off on ROCm before RDNA 4
         self.vram_mode = resolve_vram_mode(args.vram)
         self.model_state, self.model_error = "loading", None
         self.queue: "queue.Queue[Job]" = queue.Queue()
@@ -298,7 +301,8 @@ class Engine:
             job.state, job.error = "failed", f"{type(exc).__name__}: {exc}"
             traceback.print_exc()
             if isinstance(exc, torch.OutOfMemoryError):
-                job.error += " — the GPU ran out of memory; try shorter lyrics, or restart the server with --quantization fp8"
+                job.error += (" — the GPU ran out of memory; try shorter lyrics" if self.backend == "rocm" else
+                              " — the GPU ran out of memory; try shorter lyrics, or restart the server with --quantization fp8")
         finally:
             job.finished = time.time()
             self._release_gpu()
@@ -487,7 +491,7 @@ class Engine:
         queued = [j.public() for j in self.jobs.values() if j.state == "queued"]
         return {"model": {"state": self.model_state, "error": self.model_error,
                           "stage": self.pipe.stage_snapshot() if self.pipe and self.model_state == "loading" else None,
-                          "quantization": self.args.quantization, "vram_mode": self.vram_mode},
+                          "quantization": self.args.quantization, "vram_mode": self.vram_mode, "backend": self.backend},
                 "gpu": gpu, "current": current, "queue": queued,
                 "share_urls": getattr(self, "share_urls", [])}
 
@@ -1164,7 +1168,8 @@ def build_app(engine: Engine, password: str | None = None):
             except meta.PackageNotFoundError:
                 versions[pkg] = None
         return {"python": platform.python_version(), "platform": platform.platform(), "versions": versions,
-                "cuda": torch.version.cuda, "cudnn": torch.backends.cudnn.version() if torch.cuda.is_available() else None,
+                "backend": engine.backend, "cuda": torch.version.cuda, "hip": getattr(torch.version, "hip", None),
+                "cudnn": torch.backends.cudnn.version() if torch.cuda.is_available() else None,
                 "gpu": gpu, "vram_mode": engine.vram_mode, "quantization": engine.args.quantization,
                 "graph_attention": engine.args.graph_attention, "model_state": engine.model_state, "model_error": engine.model_error,
                 "weights": getattr(engine.pipe, "weights", None),
@@ -1280,8 +1285,9 @@ def main():
     engine.share_urls = [f"http://{ip}:{args.port}" for ip in lan_addresses()] if args.host == "0.0.0.0" else []
     browse_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     url = f"http://{browse_host}:{args.port}"
-    print(f"\n  Music Gen Studio -> {url}\n  GPU {gpu_total_gib():.1f} GiB -> {engine.vram_mode} VRAM mode"
-          f"{' (forced)' if args.vram != 'auto' else ''}", file=sys.stderr)
+    print(f"\n  Music Gen Studio -> {url}\n  GPU {gpu_total_gib():.1f} GiB ({engine.backend}) -> {engine.vram_mode} VRAM mode"
+          f"{' (forced)' if args.vram != 'auto' else ''}"
+          f"{'; AMD: eager decoder, no fp8' if engine.backend == 'rocm' else ''}", file=sys.stderr)
     if engine.share_urls:
         print("  Share on your network -> " + "  or  ".join(engine.share_urls)
               + f"\n  (others need Windows Firewall to allow TCP port {args.port}; see README)", file=sys.stderr)
