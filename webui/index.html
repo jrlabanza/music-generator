@@ -363,6 +363,22 @@
       <label class="field"><span class="label">Telegram chat id</span><input id="set-tg-chat" type="text" placeholder="e.g. 987654321" autocomplete="off"></label>
     </div>
     <label class="check" style="margin-bottom:12px"><input id="set-failed" type="checkbox" checked> also notify when a job fails</label>
+    <div class="row two">
+      <label class="field">
+        <span class="label">Song model</span>
+        <select id="set-model"></select>
+        <span class="hint" id="set-model-hint">The stage-1 model in models/ used to write the song; changing it reloads the model.</span>
+      </label>
+      <label class="field">
+        <span class="label">Pinned memory</span>
+        <select id="set-pin">
+          <option value="auto">Automatic</option>
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+        <span class="hint">Page-locks the copies kept in system RAM so swapping weights to and from the GPU is faster; automatic means on for NVIDIA, off for AMD.</span>
+      </label>
+    </div>
     <div class="actions"><button class="btn-primary slim" id="settings-save" type="button">Save</button><button class="btn-ghost" id="settings-test" type="button">Send a test message</button><span class="hint" id="settings-hint"></span></div>
   </div>
 </div>

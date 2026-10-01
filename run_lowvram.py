@@ -19,6 +19,12 @@ Two VRAM modes, chosen automatically from the card (``--vram auto``):
 The 0.7 GiB token-embedding table stays in RAM: rows are gathered on the CPU
 and copied over, and the CUDA-graph decoder reads them from a static buffer.
 
+The CPU-resident copies are kept in pinned (page-locked) RAM by default on
+NVIDIA, which gives every one of those copies a direct DMA path and lets the
+uploads of the swapped model halves overlap with compute (``--pin-memory``,
+``AI_PIN_MEMORY``). If the host cannot lock that much memory the first failure
+warns once and everything carries on unpinned.
+
 It also works around two gaps in the Windows PyTorch build and one upstream
 leak:
 
@@ -47,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -98,11 +105,143 @@ def effective_quantization(quantization):
         return "none"
     return quantization
 
+
+# ── Pinned (page-locked) host memory ───────────────────────────────────────────
+# A copy between system RAM and the GPU only reaches full DMA speed from pinned
+# host memory, and only a pinned source can be copied asynchronously
+# (``non_blocking=True``). This matters here because the low-VRAM mode moves
+# model halves across that boundary for every chunk of every song, the embedding
+# table is read row by row from RAM for every decoded token, and the audio
+# decoder (VAE) is moved in and out for every generation.
+#
+# The AI Studio Hub sets ``AI_PIN_MEMORY=1|0`` when it launches the studio; the
+# studio's own "Pinned memory" setting overrides it. Default when neither says:
+# on for CUDA, off for ROCm and CPU.
+#
+# Pinning needs lockable RAM the host may not have, so every allocation is
+# guarded: the first failure warns once and everything carries on unpinned.
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
+
+
+def env_pin_memory():
+    """``AI_PIN_MEMORY`` as a bool; None when unset or not recognised."""
+    raw = (os.environ.get("AI_PIN_MEMORY") or "").strip().lower()
+    if raw in _TRUTHY:
+        return True
+    if raw in _FALSY:
+        return False
+    return None
+
+
+def resolve_pin_memory(setting="auto", backend=None):
+    """Whether the CPU-resident copies should live in pinned memory.
+
+    Order: the studio setting (``on``/``off``/True/False) wins, then
+    ``AI_PIN_MEMORY``, then the backend default (CUDA on, ROCm/CPU off)."""
+    choice = str(setting).strip().lower() if not isinstance(setting, bool) else ("on" if setting else "off")
+    if choice in _TRUTHY:
+        return True
+    if choice in _FALSY:
+        return False
+    chosen = env_pin_memory()
+    if chosen is not None:
+        return chosen
+    return (backend or BACKEND) == "cuda"
+
+
+_pin_warned = False
+
+
+def _pin_failed(exc):
+    """Warn once, then carry on with ordinary pageable memory."""
+    global _pin_warned
+    if not _pin_warned:
+        _pin_warned = True
+        print(f"[lowvram] could not pin host memory ({type(exc).__name__}: {exc}); continuing unpinned "
+              "(transfers between RAM and the GPU stay synchronous and a little slower)", file=sys.stderr)
+
+
+def pinned_empty(shape, dtype):
+    """An empty pinned CPU tensor, or None when the host cannot lock any more memory."""
+    try:
+        return torch.empty(tuple(shape), dtype=dtype, device="cpu", pin_memory=True)
+    except Exception as exc:                  # cudaHostAlloc failure, or no CUDA/HIP at all
+        _pin_failed(exc)
+        return None
+
+
+def is_pinned(tensor):
+    try:
+        return tensor.device.type == "cpu" and tensor.is_pinned()
+    except Exception:
+        return False
+
+
+def pin_tensor(tensor):
+    """A pinned copy of a CPU tensor, or the tensor itself when pinning is unavailable."""
+    if tensor.device.type != "cpu" or is_pinned(tensor):
+        return tensor
+    staging = pinned_empty(tensor.shape, tensor.dtype)
+    if staging is None:
+        return tensor
+    staging.copy_(tensor)
+    return staging
+
+
+def _slot(shape, dtype, pinned, key):
+    """The cached pinned buffer for ``key``, allocated on first use; None when pinning failed."""
+    slot = pinned.get(key)
+    if slot is not None and tuple(slot.shape) == tuple(shape) and slot.dtype == dtype:
+        return slot
+    slot = pinned_empty(shape, dtype)
+    if slot is not None:
+        pinned[key] = slot
+    return slot
+
+
+def _move_tensor(tensor, target, pinned, key, non_blocking):
+    if target.type == "cpu":
+        if is_pinned(tensor):
+            pinned[key] = tensor
+            return tensor
+        slot = _slot(tensor.shape, tensor.dtype, pinned, key)
+        if slot is None:
+            return tensor if tensor.device.type == "cpu" else tensor.to("cpu")
+        slot.copy_(tensor)        # synchronous on purpose: the fp8 paths read these weights next
+        return slot
+    if tensor.device == target:
+        return tensor
+    return tensor.to(target, non_blocking=non_blocking and is_pinned(tensor))
+
+
+def move_module(module, device, *, pinned=None, non_blocking=False):
+    """``module.to(device)`` for every parameter and buffer, through pinned staging buffers.
+
+    ``pinned`` is a dict of CPU-side pinned mirrors, one per tensor, so a module that
+    shuttles between RAM and the GPU is pinned once and then reused — the RAM footprint
+    is the same as before, it is just page-locked. ``pinned=None`` falls back to plain
+    ``module.to(device)``. Uploads are issued with ``non_blocking`` (same stream as the
+    compute that follows, so they stay ordered); the copies back to the CPU stay
+    synchronous because Python reads those weights straight away.
+    """
+    if pinned is None:
+        module.to(device)
+        return
+    target = torch.device(device)
+    for sub in module.modules():
+        for name, param in sub._parameters.items():
+            if param is not None:
+                param.data = _move_tensor(param.data, target, pinned, (id(sub), "p", name), non_blocking)
+        for name, buffer in sub._buffers.items():
+            if buffer is not None:
+                sub._buffers[name] = _move_tensor(buffer, target, pinned, (id(sub), "b", name), non_blocking)
+
+
 # ── 0. Text encoding on Windows ────────────────────────────────────────────────
 # Upstream writes its JSON artifacts with the platform default encoding (cp1252
 # on Windows), which raises UnicodeEncodeError for any character outside it —
 # e.g. a "⸻" pasted into the lyrics — after the song has already been generated.
-import os
 import yue2.storage as storage
 import yue2.pipeline as pipeline_module
 
@@ -174,21 +313,39 @@ class CPUEmbedding(torch.nn.Module):
     work can run, so ``StaticGraphAR`` fills ``static`` before each replay.
     """
 
-    def __init__(self, embedding, device):
+    def __init__(self, embedding, device, *, pin_memory=False):
         super().__init__()
         self.table = embedding.weight.detach().to("cpu")      # plain attribute: .to() never moves it
         self.num_embeddings, self.embedding_dim = self.table.shape
         self.static = None
+        self.pin_memory = bool(pin_memory)
+        self._staging = {}                                    # pinned CPU buffers for the gathered rows
         # GraphAR reads embed_tokens.weight for its device/dtype probe.
         self.weight = torch.empty(0, dtype=self.table.dtype, device=device)
 
     def rows(self, ids):
         return F.embedding(torch.as_tensor(ids, device="cpu"), self.table)
 
+    def staged(self, shape, dtype):
+        """A reusable pinned buffer of this shape, or None when pinning is off/unavailable."""
+        if not self.pin_memory:
+            return None
+        slot = _slot(shape, dtype, self._staging, (tuple(shape), dtype))
+        if slot is None:
+            self.pin_memory = False                           # _pin_failed() already warned
+        return slot
+
     def forward(self, ids):
         if self.static is not None:
             return self.static
-        return self.rows(ids).to(ids.device)
+        rows = self.rows(ids)
+        slot = self.staged(rows.shape, rows.dtype)
+        if slot is None:
+            return rows.to(ids.device)
+        slot.copy_(rows)
+        # Synchronous on purpose: the buffer is reused on the next call, and a pinned
+        # source already gives the copy a direct DMA path.
+        return slot.to(ids.device)
 
 
 def release_weight_norm(module):
@@ -217,8 +374,10 @@ class StaticGraphAR(cuda_graph.GraphAR):
         embed = model.model.embed_tokens
         self.embed = embed if isinstance(embed, CPUEmbedding) else None
         self.x0 = None
+        self.staging = None                          # pinned CPU mirror of x0 (see step())
         if self.embed is not None:
             self.x0 = torch.zeros(self.branches, 1, self.embed.embedding_dim, device=self.device, dtype=self.dtype)
+            self.staging = self.embed.staged(self.x0.shape, self.dtype)
 
     def prefill(self):
         if self.embed is not None:
@@ -233,13 +392,20 @@ class StaticGraphAR(cuda_graph.GraphAR):
     def step(self, token):
         if self.embed is not None:
             index = int(token.item()) if isinstance(token, torch.Tensor) else int(token)
-            self.x0.copy_(self.embed.rows([index]).to(self.dtype)[None].expand(self.branches, 1, -1))
+            row = self.embed.rows([index]).to(self.dtype)[None]        # [1, 1, dim]
+            if self.staging is None:
+                self.x0.copy_(row.expand(self.branches, 1, -1))
+            else:
+                self.staging.copy_(row)                               # broadcast into pinned memory
+                # Synchronous: the buffer is rewritten on the next token, and the pinned
+                # source is what makes this per-token copy a direct DMA.
+                self.x0.copy_(self.staging)
         return super().step(token)
 
     def close(self):
         if self.embed is not None:
             self.embed.static = None
-        self.x0 = None
+        self.x0 = self.staging = None
         super().close()
 
 
@@ -258,21 +424,48 @@ class StandardPipeline(YuE2Pipeline):
 
     vram_mode = "normal"
 
-    def __init__(self, *args, gpu_reserve_gib=None, **kwargs):
+    def __init__(self, *args, gpu_reserve_gib=None, pin_memory="auto", **kwargs):
         super().__init__(*args, **kwargs)
         self.gpu_reserve_gib = gpu_reserve_gib
+        self.pin_memory = resolve_pin_memory(pin_memory) and self.device.type == "cuda"
+        self._pinned = {}                            # per-tensor pinned CPU mirrors (see move_module)
         if gpu_reserve_gib is not None and self.device.type == "cuda":
             total = torch.cuda.get_device_properties(self.device).total_memory
             fraction = (total - gpu_reserve_gib * 2**30) / total
             torch.cuda.set_per_process_memory_fraction(min(max(fraction, 0.1), 1.0), self.device)
 
+    # pinned host memory -----------------------------------------------------
+    def pinned(self):
+        """The pinned staging cache, or None when pinned memory is switched off."""
+        return self._pinned if self.pin_memory else None
+
+    def park_model(self, *, pinned=None):
+        """Move the transformer back to system RAM (into pinned buffers when pinning is on)."""
+        if self._model is not None:
+            move_module(self._model, "cpu", pinned=self.pinned() if pinned is None else pinned)
+
     def decode(self, latents, *, full=False, vae=None):
+        pinned = self.pinned()
+        if pinned is not None:
+            # Upstream moves the transformer out of VRAM and the audio decoder in for
+            # every generation: park both through pinned buffers so each trip is a DMA.
+            self.park_model(pinned=pinned)
+            if self._vae is not None:
+                move_module(self._vae, "cpu", pinned=pinned)
         try:
             return super().decode(latents, full=full, vae=vae)
         finally:
             release_weight_norm(self._vae)           # upstream's .to("cpu") leaves 254 MiB behind
+            if pinned is not None and self._vae is not None:
+                move_module(self._vae, "cpu", pinned=pinned)      # pinned again for the next decode
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            self._pinned.clear()                     # release the page-locked RAM
 
 
 class LowVRAMPipeline(StandardPipeline):
@@ -294,16 +487,17 @@ class LowVRAMPipeline(StandardPipeline):
     def _place(self, *, ar, nar, lm_head):
         ar_modules, nar_modules, head, small = self._groups()
         plan = [(ar_modules, ar), (nar_modules, nar), (head, lm_head), (small, True)]
+        pinned = self.pinned()              # None -> plain module.to(), exactly as before
         for group, on_gpu in plan:          # free first ...
             if not on_gpu:
                 for module in group:
-                    module.to("cpu")
+                    move_module(module, "cpu", pinned=pinned)
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
         for group, on_gpu in plan:          # ... then fill
             if on_gpu:
                 for module in group:
-                    module.to(self.device)
+                    move_module(module, self.device, pinned=pinned, non_blocking=True)
 
     def _report(self, label):
         if self.device.type == "cuda":
@@ -323,7 +517,8 @@ class LowVRAMPipeline(StandardPipeline):
                 self.load_timing["mot_load_seconds"] = time.perf_counter() - start
         model = self._model
         if not isinstance(model.model.embed_tokens, CPUEmbedding):
-            model.model.embed_tokens = CPUEmbedding(model.model.embed_tokens, self.device)
+            model.model.embed_tokens = CPUEmbedding(model.model.embed_tokens, self.device,
+                                                    pin_memory=self.pin_memory)
         if for_nar:
             self._place(ar=True, nar=False, lm_head=False)
         else:
@@ -393,9 +588,10 @@ def pipeline_class(mode="auto"):
 
 
 def make_pipeline(model, vae, *, vram="auto", quantization="none", gpu_reserve_gib=2.0,
-                  graph_attention="cudnn", bases=(), **kwargs):
+                  graph_attention="cudnn", pin_memory="auto", bases=(), **kwargs):
     """Build the pipeline for this GPU: ``low`` swaps model halves (8 GB cards),
     ``normal`` keeps the whole model resident (16 GB+), ``auto`` picks by VRAM.
+    ``pin_memory`` is ``auto``/``on``/``off`` (see resolve_pin_memory).
     ``bases`` are extra mixins placed in front of the pipeline class."""
     global GRAPH_ATTENTION
     GRAPH_ATTENTION = graph_attention
@@ -410,7 +606,8 @@ def make_pipeline(model, vae, *, vram="auto", quantization="none", gpu_reserve_g
     eager = quantization == "fp8" or BACKEND == "rocm"
     return cls.from_pretrained(model, vae=vae, device="cuda", memory_budget_gib=budget,
                                backend="torch-eager" if eager else "torch",
-                               quantization=quantization, gpu_reserve_gib=gpu_reserve_gib, **kwargs)
+                               quantization=quantization, gpu_reserve_gib=gpu_reserve_gib,
+                               pin_memory=pin_memory, **kwargs)
 
 
 # ── 6. CLI ─────────────────────────────────────────────────────────────────────
@@ -436,6 +633,10 @@ def main():
                         help="cudnn is fast; sdpa is seed-reproducible but ~2.7x slower")
     parser.add_argument("--gpu-reserve-gib", type=float, default=2.0,
                         help="VRAM left for the driver/desktop; lower it if you close other GPU apps")
+    parser.add_argument("--pin-memory", choices=("auto", "on", "off"), default="auto",
+                        help="keep the CPU-resident weights in pinned (page-locked) RAM so the swaps to and "
+                             "from the GPU are faster; auto follows AI_PIN_MEMORY, then the GPU backend "
+                             "(on for NVIDIA, off for AMD/CPU)")
     args = parser.parse_args()
 
     if args.output.exists():
@@ -461,9 +662,11 @@ def main():
         parser.error("A supplied score requires full or melody mode.")
 
     mode = resolve_vram_mode(args.vram)
-    print(f"[lowvram] GPU {gpu_total_gib():.1f} GiB ({BACKEND}) -> {mode} VRAM mode", file=sys.stderr)
+    print(f"[lowvram] GPU {gpu_total_gib():.1f} GiB ({BACKEND}) -> {mode} VRAM mode; pinned memory "
+          f"{'on' if resolve_pin_memory(args.pin_memory) else 'off'}", file=sys.stderr)
     with make_pipeline(args.model, vae=args.vae, vram=mode, quantization=args.quantization,
-                       gpu_reserve_gib=args.gpu_reserve_gib, graph_attention=args.graph_attention) as pipe:
+                       gpu_reserve_gib=args.gpu_reserve_gib, graph_attention=args.graph_attention,
+                       pin_memory=args.pin_memory) as pipe:
         song = pipe(**request)
         song.save_artifacts(args.output)
         print(json.dumps({"audio": str(args.output / "audio.flac"),

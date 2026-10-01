@@ -194,6 +194,38 @@ To override the detection: `initialize.bat --gpu nvidia|amd|cpu` (also `--gfx gf
 
 On Linux, `linux/initialize.sh` does the same detection (`--gpu nvidia|amd`, `--gfx gfx1100`): on AMD it installs Docker without the NVIDIA toolkit, checks `/dev/kfd` + `/dev/dri`, adds you to the `video` and `render` groups, builds `ai/yue2:rocm`, reads the gfx target with `rocminfo` inside the container and writes `.gpu.json` (`"backend": "rocm"`). `linux/run.sh`, `stop.sh`, `test.sh` and `cli.sh` pick the compose file and image from that file; `AI_GPU=rocm|cuda` forces one. Cards outside AMD's Linux matrix (RX 6700/6650/6600 = gfx1031/1032, the 780M/760M iGPU = gfx1103) get `HSA_OVERRIDE_GFX_VERSION` (`10.3.0` / `11.0.0`) written to `linux/.env`, which the ROCm container passes through. See `linux/README.md`.
 
+## Choosing the model
+
+The song (stage-1) model is any YuE2 folder under `models/` - `YuE2-3B` as downloaded, or another
+checkpoint with the same layout (a `config.json` and its safetensors) dropped next to it. **Settings →
+Song model** lists what is there and switches; changing it unloads the current model and the next
+generation loads the chosen one. The choice is saved as `model_dir` in the app's settings. The VAE
+(`YuE2-Vae`, `YuE2-Vae-legacy`), `SheetSage2` and `MERT-v2-FullSong` keep their folder names.
+
+The same thing over the API, which the AI Studio Hub's Models page uses:
+
+| | |
+|---|---|
+| `GET /api/models` | `{"models": [{"name", "path", "size_bytes", "selected"}, …], "selected": "YuE2-3B"}` |
+| `POST /api/models/select` `{"name": "…"}` | saves the choice; `"reloading": true` when a loaded model was dropped for it |
+| `GET /api/status` | includes `model_dir` (the folder in use) |
+
+## Pinned memory
+
+The low-VRAM mode moves model halves between system RAM and the GPU for every chunk of every song,
+reads the token-embedding table from RAM for every decoded token and moves the audio decoder in and out
+per generation. With **pinned memory** those CPU-side copies live in page-locked RAM, which gives each
+transfer a direct DMA path and lets the uploads overlap with compute. The cost is RAM that cannot be
+swapped out.
+
+Default: **on for NVIDIA (CUDA), off for AMD (ROCm) and CPU**. The AI Studio Hub sets `AI_PIN_MEMORY=1`
+/ `=0` when it launches the studio; **Settings → Pinned memory** (Automatic / On / Off, saved as
+`pin_memory`) overrides it and applies to every transfer from then on; `run_lowvram.py --pin-memory
+on|off` does the same on the command line. If the host cannot lock that much memory the first failure
+warns once and everything carries on unpinned. `GET /api/status` reports the resolved `pin_memory`.
+Status: implemented and checked in the container (resolution and tensor pinning); the speed-up has not
+been measured on a full song yet.
+
 ## VRAM modes
 
 | Mode | Picked when | What happens |

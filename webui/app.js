@@ -38,7 +38,8 @@
     songShareOverlay: $("song-share-overlay"), songShareClose: $("song-share-close"), songShareDays: $("song-share-days"), songShareQr: $("song-share-qr"),
     songShareUrl: $("song-share-url"), songShareCopy: $("song-share-copy"), songShareOpen: $("song-share-open"),
     settingsOverlay: $("settings-overlay"), settingsClose: $("settings-close"), setName: $("set-name"), setDiscord: $("set-discord"),
-    setTgToken: $("set-tg-token"), setTgChat: $("set-tg-chat"), setFailed: $("set-failed"), settingsSave: $("settings-save"), settingsTest: $("settings-test"), settingsHint: $("settings-hint"),
+    setTgToken: $("set-tg-token"), setTgChat: $("set-tg-chat"), setFailed: $("set-failed"), setPin: $("set-pin"),
+    setModel: $("set-model"), setModelHint: $("set-model-hint"), settingsSave: $("settings-save"), settingsTest: $("settings-test"), settingsHint: $("settings-hint"),
   };
   const TOKENS_PER_SECOND = 25;
   const STAGE_STEPS = [
@@ -1096,6 +1097,20 @@
 
   // ── settings (name + notifications) ──────────────────────────────────
   function renderUserPill() { const name = userName(); el.pillUser.querySelector(".pill-text").textContent = name ? `You: ${name}` : "Who's this?"; }
+  function gib(bytes) { return `${(bytes / 2 ** 30).toFixed(1)} GB`; }
+  async function loadModelChoices() {
+    const data = await api("/api/models");
+    el.setModel.innerHTML = "";
+    for (const m of data.models) {
+      const option = document.createElement("option");
+      option.value = m.name;
+      option.textContent = m.size_bytes ? `${m.name} (${gib(m.size_bytes)})` : m.name;
+      el.setModel.appendChild(option);
+    }
+    el.setModel.value = data.selected || "";
+    el.setModel.disabled = data.models.length < 2;
+    if (!data.models.length) el.setModelHint.textContent = "No stage-1 model found in models/ — run the downloader.";
+  }
   async function openSettings() {
     el.setName.value = userName();
     el.settingsHint.textContent = "";
@@ -1103,6 +1118,8 @@
       const s = await api("/api/settings");
       el.setDiscord.value = s.discord_webhook || ""; el.setTgToken.value = s.telegram_bot_token || ""; el.setTgChat.value = s.telegram_chat_id || "";
       el.setFailed.checked = s.notify_failed !== false;
+      el.setPin.value = s.pin_memory || "auto";
+      await loadModelChoices();
     } catch (error) { el.settingsHint.textContent = error.message; }
     el.settingsOverlay.hidden = false;
     el.setName.focus();
@@ -1115,10 +1132,14 @@
     renderUserPill();
     el.settingsSave.disabled = true;
     try {
-      await put("/api/settings", { discord_webhook: el.setDiscord.value.trim(), telegram_bot_token: el.setTgToken.value.trim(), telegram_chat_id: el.setTgChat.value.trim(), notify_failed: el.setFailed.checked });
-      el.settingsHint.textContent = "Saved.";
+      await put("/api/settings", { discord_webhook: el.setDiscord.value.trim(), telegram_bot_token: el.setTgToken.value.trim(), telegram_chat_id: el.setTgChat.value.trim(), notify_failed: el.setFailed.checked, pin_memory: el.setPin.value });
+      let reloading = false;
+      if (el.setModel.value && el.setModel.value !== (state.status && state.status.model_dir)) {
+        reloading = (await post("/api/models/select", { name: el.setModel.value })).reloading;
+      }
+      el.settingsHint.textContent = reloading ? `Saved — loading ${el.setModel.value}…` : "Saved.";
       renderLibrary();
-      setTimeout(() => { el.settingsOverlay.hidden = true; }, 500);
+      setTimeout(() => { el.settingsOverlay.hidden = true; }, reloading ? 1200 : 500);
     } catch (error) { el.settingsHint.textContent = error.message; }
     finally { el.settingsSave.disabled = false; }
   });
@@ -1156,6 +1177,9 @@
     const rows = [
       ["GPU", d.gpu ? `${d.gpu.name} · ${d.gpu.total_gib} GiB (free ${d.gpu.free_gib}) · cc ${d.gpu.capability}` : "none"],
       ["Mode", `${d.vram_mode} VRAM · quantization ${d.quantization} · graph attention ${d.graph_attention} · model ${d.model_state}${d.model_error ? " (" + d.model_error + ")" : ""}`],
+      ["Song model", `${d.model_dir} · pinned memory ${d.pin_memory ? "on" : "off"} (setting ${d.pin_memory_setting}`
+        + `${d.pin_memory_env === null ? ", AI_PIN_MEMORY unset" : ", AI_PIN_MEMORY " + (d.pin_memory_env ? "1" : "0")})`
+        + ` · available: ${(d.song_models || []).join(", ") || "none"}`],
       ["Software", `Python ${d.python} · torch ${d.versions.torch} · CUDA ${d.cuda} · cuDNN ${d.cudnn} · transformers ${d.versions.transformers} · yue2-infer ${d.versions["yue2-infer"]}`],
       ...Object.entries(d.models).map(([name, m]) => [name, m.present ? `${m.size_gb} GB · ${m.path}` : `not downloaded (${m.path})`]),
       ["Cover feature", d.sheetsage2_env && d.models.SheetSage2.present ? "SheetSage2 ready" + (d.ffmpeg ? " · ffmpeg found" : " · no ffmpeg (wav/flac/mp3/ogg still work)") : "SheetSage2 not set up"],

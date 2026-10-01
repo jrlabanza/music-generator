@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import gc
 import json
 import mimetypes
 import os
@@ -35,8 +36,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from run_lowvram import (BACKEND, HERE, MODELS, REPO, VRAM_MODES, effective_quantization, gpu_total_gib, make_pipeline,
-                         resolve_vram_mode)
+from run_lowvram import (BACKEND, HERE, MODELS, REPO, VRAM_MODES, effective_quantization, env_pin_memory,
+                         gpu_total_gib, make_pipeline, resolve_pin_memory, resolve_vram_mode)
 
 WEB = HERE / "webui"
 OUTPUTS = HERE / "outputs"
@@ -94,10 +95,69 @@ SHARE_SECRET_FILE = HERE / ".share_secret"
 WHISPER_MODEL = os.environ.get("MUSICGEN_WHISPER_MODEL", "openai/whisper-small")
 
 
+PIN_MEMORY_CHOICES = ("auto", "on", "off")
+MODEL_DEFAULT = "YuE2-3B"               # the stage-1 song model download_models.py fetches
+
+
 def read_settings():
     data = read_json(SETTINGS_FILE) or {}
+    pin = str(data.get("pin_memory") or "auto").strip().lower()
     return {"discord_webhook": str(data.get("discord_webhook") or ""), "telegram_bot_token": str(data.get("telegram_bot_token") or ""),
-            "telegram_chat_id": str(data.get("telegram_chat_id") or ""), "notify_failed": bool(data.get("notify_failed", True))}
+            "telegram_chat_id": str(data.get("telegram_chat_id") or ""), "notify_failed": bool(data.get("notify_failed", True)),
+            "pin_memory": pin if pin in PIN_MEMORY_CHOICES else "auto",
+            "model_dir": str(data.get("model_dir") or "").strip()}
+
+
+def write_settings(settings):
+    SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
+
+# ── Stage-1 song models under models/ ─────────────────────────────────────────
+# The hub's Models page lists these and switches between them. A folder qualifies
+# when it holds a config.json that names the YuE2 causal-LM architecture (or the
+# "yue2" model_type), safetensors weights and the qwen.tiktoken vocabulary the
+# pipeline's tokenizer needs. That excludes the audio decoder (YuE2VAE), the
+# transcriber (SheetSage2Model) and its backbone (MERT2Model), which live in the
+# same folder but are not interchangeable with the song model.
+MODEL_ARCHITECTURES = {"YuE2ForCausalLM"}
+MODEL_TYPES = {"yue2"}
+NOT_SONG_MODELS = {"YuE2-Vae", "YuE2-Vae-legacy", "SheetSage2", "MERT-v2-FullSong"}
+
+
+def model_info(path: Path):
+    """{"name", "path", "size_bytes"} when the folder is a YuE2 stage-1 song model, else None."""
+    if not path.is_dir() or path.name.startswith(".") or path.name in NOT_SONG_MODELS:
+        return None
+    config = read_json(path / "config.json")
+    if not isinstance(config, dict) or not any(path.glob("*.safetensors")) or not (path / "qwen.tiktoken").is_file():
+        return None
+    architectures = {str(a) for a in (config.get("architectures") or [])}
+    if not (architectures & MODEL_ARCHITECTURES or str(config.get("model_type") or "") in MODEL_TYPES):
+        return None
+    size = 0
+    for file in path.rglob("*"):
+        if file.is_file() and ".cache" not in file.relative_to(path).parts:
+            size += file.stat().st_size
+    return {"name": path.name, "path": str(path), "size_bytes": size}
+
+
+def song_models():
+    """Every usable stage-1 model folder under models/, by name."""
+    if not MODELS.is_dir():
+        return []
+    found = [model_info(p) for p in sorted(MODELS.iterdir())]
+    return [m for m in found if m is not None]
+
+
+def selected_model_name():
+    """The chosen folder name: the setting when it still names a usable model, else the default."""
+    names = [m["name"] for m in song_models()]
+    wanted = read_settings()["model_dir"]
+    if wanted and wanted in names:
+        return wanted
+    if MODEL_DEFAULT in names:
+        return MODEL_DEFAULT
+    return names[0] if names else (wanted or MODEL_DEFAULT)
 
 
 def share_secret():
@@ -259,33 +319,93 @@ class Engine:
         self.backend = BACKEND                                  # cuda (NVIDIA), rocm (AMD) or cpu
         args.quantization = effective_quantization(args.quantization)   # fp8 is off on ROCm before RDNA 4
         self.vram_mode = resolve_vram_mode(args.vram)
+        self.model_path = self._wanted_model()                  # stage-1 model folder in use
+        self.model_name = self.model_path.name
         self.model_state, self.model_error = "loading", None
-        self.queue: "queue.Queue[Job]" = queue.Queue()
+        self.queue: "queue.Queue[Job | None]" = queue.Queue()   # None is a nudge to re-check the model
         self.jobs: dict[str, Job] = {}
         self.current: Job | None = None
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._run, name="yue2-worker", daemon=True)
         self.thread.start()
 
-    def _run(self):
+    # model loading ----------------------------------------------------------
+    def _wanted_model(self):
+        """The stage-1 folder to load: --model for this run, else the saved choice."""
+        return Path(self.args.model) if self.args.model else MODELS / selected_model_name()
+
+    def _pin_setting(self):
+        return getattr(self.args, "pin_memory", None) or read_settings()["pin_memory"]
+
+    def pin_memory(self):
+        """Whether pinned host memory is in use: the setting, else AI_PIN_MEMORY, else the backend."""
+        if self.pipe is not None:
+            return bool(getattr(self.pipe, "pin_memory", False))
+        return resolve_pin_memory(self._pin_setting(), self.backend)
+
+    def apply_pin_memory(self):
+        """Push the setting onto a loaded pipeline; it governs every later transfer."""
+        if self.pipe is not None:
+            self.pipe.pin_memory = resolve_pin_memory(self._pin_setting(), self.backend) \
+                and self.pipe.device.type == "cuda"
+        return self.pin_memory()
+
+    def unload(self):
+        """Drop the pipeline and free its GPU and RAM. Worker thread only."""
+        pipe, self.pipe = self.pipe, None
+        self.model_state, self.model_error = "unloaded", None
+        if pipe is not None:
+            try:
+                pipe.close()
+            except Exception:
+                traceback.print_exc()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _ensure_model(self):
+        """Load the pipeline for the selected model folder, reloading it after a change.
+        Worker thread only; -> True when a pipeline is ready."""
+        wanted = self._wanted_model()
+        if self.pipe is not None and self.model_state == "ready" and self.model_path == wanted:
+            return True
+        if self.pipe is not None:
+            self.unload()
+        self.model_path, self.model_name = wanted, wanted.name
+        self.model_state, self.model_error = "loading", None
         try:
             self.pipe = make_pipeline(
-                self.args.model, vae=self.args.vae, vram=self.vram_mode, quantization=self.args.quantization,
+                str(wanted), vae=self.args.vae, vram=self.vram_mode, quantization=self.args.quantization,
                 gpu_reserve_gib=self.args.gpu_reserve_gib, graph_attention=self.args.graph_attention,
-                bases=(StageObserver,))
+                pin_memory=self._pin_setting(), bases=(StageObserver,))
             self.pipe.preload()
             self.model_state = "ready"
+            return True
         except Exception as exc:                       # surface to the page instead of dying silently
+            self.pipe = None
             self.model_state, self.model_error = "error", f"{type(exc).__name__}: {exc}"
             traceback.print_exc()
-            return
+            return False
+
+    def reload(self):
+        """Ask the worker to pick up a changed model selection as soon as it is idle."""
+        self.queue.put(None)
+
+    def _run(self):
+        self._ensure_model()                           # warm the model before the first request
         work = {"song": self._work_song, "plan": self._work_plan, "decode": self._work_decode,
                 "transcribe": self._work_transcribe, "voice": self._work_voice, "stems": self._work_stems,
                 "karaoke": self._work_karaoke}
         while True:
             job = self.queue.get()
+            if job is None:                            # model selection changed
+                self._ensure_model()
+                continue
             if job.cancel_requested:
                 job.state, job.finished = "cancelled", time.time()
+                continue
+            if not self._ensure_model():
+                job.state, job.error, job.finished = "failed", self.model_error, time.time()
                 continue
             self._run_job(job, work[job.kind])
 
@@ -449,7 +569,7 @@ class Engine:
         """Park the transformer in RAM between jobs so the card is free for other apps."""
         try:
             if self.pipe is not None and self.pipe._model is not None:
-                self.pipe._model.to("cpu")
+                self.pipe.park_model()          # into pinned RAM when pinned memory is on
         except Exception:
             traceback.print_exc()
         if torch.cuda.is_available():
@@ -491,7 +611,9 @@ class Engine:
         queued = [j.public() for j in self.jobs.values() if j.state == "queued"]
         return {"model": {"state": self.model_state, "error": self.model_error,
                           "stage": self.pipe.stage_snapshot() if self.pipe and self.model_state == "loading" else None,
-                          "quantization": self.args.quantization, "vram_mode": self.vram_mode, "backend": self.backend},
+                          "quantization": self.args.quantization, "vram_mode": self.vram_mode, "backend": self.backend,
+                          "dir": self.model_name, "pin_memory": self.pin_memory()},
+                "pin_memory": self.pin_memory(), "model_dir": self.model_name,
                 "gpu": gpu, "current": current, "queue": queued,
                 "share_urls": getattr(self, "share_urls", [])}
 
@@ -652,6 +774,11 @@ class SettingsRequest(BaseModel):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     notify_failed: bool | None = None
+    pin_memory: str | None = None               # auto | on | off
+
+
+class ModelSelectRequest(BaseModel):
+    name: str
 
 
 class DescribeRequest(BaseModel):
@@ -1124,8 +1251,41 @@ def build_app(engine: Engine, password: str | None = None):
             raise HTTPException(422, "That does not look like a Discord webhook URL (https://discord.com/api/webhooks/...).")
         if body.notify_failed is not None:
             settings["notify_failed"] = bool(body.notify_failed)
-        SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        if body.pin_memory is not None:
+            choice = body.pin_memory.strip().lower()
+            if choice not in PIN_MEMORY_CHOICES:
+                raise HTTPException(422, f"pin_memory must be one of {', '.join(PIN_MEMORY_CHOICES)}.")
+            settings["pin_memory"] = choice
+        write_settings(settings)
+        if body.pin_memory is not None:
+            engine.apply_pin_memory()          # governs every transfer from here on
         return get_settings()
+
+    # ── stage-1 model selection (the AI Studio Hub's Models page) ──────────
+    def models_payload():
+        selected = selected_model_name()
+        return {"models": [{**m, "selected": m["name"] == selected} for m in song_models()],
+                "selected": selected}
+
+    @app.get("/api/models")
+    def models():
+        return models_payload()
+
+    @app.post("/api/models/select")
+    def select_model(body: ModelSelectRequest):
+        name = body.name.strip()
+        if engine.args.model:
+            raise HTTPException(409, "This run was started with --model, which pins the song model; "
+                                     "restart without it to choose one here.")
+        if name not in {m["name"] for m in song_models()}:
+            raise HTTPException(404, f"No YuE2 song model named {name!r} in {MODELS}.")
+        settings = read_settings()
+        settings["model_dir"] = name
+        write_settings(settings)
+        changed = engine.model_path != MODELS / name
+        if changed:
+            engine.reload()                    # the worker unloads and loads the chosen model
+        return {**models_payload(), "reloading": changed}
 
     @app.post("/api/settings/test")
     def test_settings():
@@ -1172,6 +1332,9 @@ def build_app(engine: Engine, password: str | None = None):
                 "cudnn": torch.backends.cudnn.version() if torch.cuda.is_available() else None,
                 "gpu": gpu, "vram_mode": engine.vram_mode, "quantization": engine.args.quantization,
                 "graph_attention": engine.args.graph_attention, "model_state": engine.model_state, "model_error": engine.model_error,
+                "pin_memory": engine.pin_memory(), "pin_memory_setting": read_settings()["pin_memory"],
+                "pin_memory_env": env_pin_memory(), "model_dir": engine.model_name,
+                "song_models": [m["name"] for m in song_models()],
                 "weights": getattr(engine.pipe, "weights", None),
                 "models": {name: folder(path) for name, path in (("YuE2-3B", MODELS / "YuE2-3B"), ("YuE2-Vae", MODELS / "YuE2-Vae"),
                            ("YuE2-Vae-legacy", LEGACY_VAE), ("SheetSage2", SHEETSAGE_MODEL), ("MERT-v2-FullSong", MODELS / "MERT-v2-FullSong"))},
@@ -1238,7 +1401,9 @@ def main():
                         help="require this password (HTTP Basic auth, any username) for every page and download; "
                              "also read from the MUSICGEN_PASSWORD environment variable. Use it whenever the app "
                              "is reachable beyond your own machine")
-    parser.add_argument("--model", default=str(MODELS / "YuE2-3B"))
+    parser.add_argument("--model", default=None,
+                        help="stage-1 model folder to load for this run; overrides the saved choice "
+                             f"(default: the Models setting, else models/{MODEL_DEFAULT})")
     parser.add_argument("--vae", default=str(MODELS / "YuE2-Vae"))
     parser.add_argument("--vram", choices=VRAM_MODES, default="auto",
                         help="low: swap model halves through system RAM (8 GB cards); "
@@ -1247,6 +1412,10 @@ def main():
     parser.add_argument("--gpu-reserve-gib", type=float, default=2.0)
     parser.add_argument("--graph-attention", choices=("cudnn", "sdpa"), default="cudnn",
                         help="cudnn is fast; sdpa is seed-reproducible but ~2.7x slower")
+    parser.add_argument("--pin-memory", choices=PIN_MEMORY_CHOICES, default=None,
+                        help="keep the CPU-resident weights in pinned (page-locked) RAM so the swaps to and from "
+                             "the GPU are faster; overrides the Pinned memory setting for this run (default: the "
+                             "setting, else AI_PIN_MEMORY, else on for NVIDIA and off for AMD/CPU)")
     parser.add_argument("--password-file", type=Path, help="read the password from this file (first line)")
     parser.add_argument("--tunnel", action="store_true",
                         help="publish the app on the internet through a Cloudflare quick tunnel (needs cloudflared and a password); "
@@ -1257,9 +1426,11 @@ def main():
     parser.add_argument("--no-keep-awake", dest="keep_awake", action="store_false")
     parser.add_argument("--open", action="store_true", help="open the page in your browser once the server is up")
     args = parser.parse_args()
-    for path in (args.model, args.vae):
+    for path in ([args.model] if args.model else []) + [args.vae]:
         if not Path(path).is_dir():
             sys.exit(f"Model directory not found: {path} -- run download_models.py first (about 7.3 GB).")
+    if not args.model and not song_models():
+        sys.exit(f"No YuE2 song model in {MODELS} -- run download_models.py first (about 7.3 GB).")
     import uvicorn
     if args.password_file:
         args.password = args.password_file.read_text(encoding="utf-8").splitlines()[0].strip() or None
@@ -1287,7 +1458,9 @@ def main():
     url = f"http://{browse_host}:{args.port}"
     print(f"\n  Music Gen Studio -> {url}\n  GPU {gpu_total_gib():.1f} GiB ({engine.backend}) -> {engine.vram_mode} VRAM mode"
           f"{' (forced)' if args.vram != 'auto' else ''}"
-          f"{'; AMD: eager decoder, no fp8' if engine.backend == 'rocm' else ''}", file=sys.stderr)
+          f"{'; AMD: eager decoder, no fp8' if engine.backend == 'rocm' else ''}"
+          f"\n  Song model {engine.model_name}; pinned memory {'on' if engine.pin_memory() else 'off'} "
+          f"(setting: {engine._pin_setting()}, AI_PIN_MEMORY: {env_pin_memory()})", file=sys.stderr)
     if engine.share_urls:
         print("  Share on your network -> " + "  or  ".join(engine.share_urls)
               + f"\n  (others need Windows Firewall to allow TCP port {args.port}; see README)", file=sys.stderr)
