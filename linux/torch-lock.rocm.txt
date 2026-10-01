@@ -1,0 +1,3 @@
+# ROCm image: the same version as torch-lock.txt, installed as the
+# torch==2.10.0+rocm7.0 wheel (install-pins.sh compares the base version).
+torch==2.10.0

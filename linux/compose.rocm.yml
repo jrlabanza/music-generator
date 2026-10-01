@@ -1,0 +1,60 @@
+# yue2 - containerised (Linux), AMD / ROCm variant of compose.yml. Run with
+# ./run.sh once .gpu.json says "backend": "rocm" (or AI_GPU=rocm); see README.md.
+#
+# Same layout as compose.yml: the repo root is bind-mounted at /app, so code,
+# models and outputs stay on the host and the image holds only the Python
+# environment. Ports bind to 127.0.0.1 unless AI_BIND is set (e.g. in a .env
+# file next to this file).
+#
+# AI_CACHE must be a directory the host user owns; run.sh/test.sh create it and
+# pass it through. Left to Docker, a missing path is created root-owned and the
+# non-root container cannot write to it.
+#
+# GPU access on AMD is the kernel's amdgpu driver, not a container runtime: the
+# container gets /dev/kfd + /dev/dri and joins the host's video/render groups
+# (AI_VIDEO_GID / AI_RENDER_GID, exported by run.sh from `getent group`).
+# HSA_OVERRIDE_GFX_VERSION comes from linux/.env for cards outside AMD's Linux
+# matrix (initialize.sh writes it when it knows the chip).
+name: ai-yue2
+
+x-common: &common
+  restart: "no"
+  # Give the tool time to unload models on stop (Docker default is 10 s).
+  stop_grace_period: 30s
+  # Run as the host user: files written to the bind mount are yours, and a
+  # non-root uid has no Linux capabilities at all (verified CapEff=0).
+  user: "${AI_UID:-1000}:${AI_GID:-1000}"
+  group_add: ["${AI_VIDEO_GID:-44}", "${AI_RENDER_GID:-992}"]
+  # seccomp=unconfined: the ROCm runtime's memory mapping is blocked by the
+  # default profile on some kernels; the uid still has no capabilities.
+  security_opt: ["seccomp=unconfined", "no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  devices: ["/dev/kfd", "/dev/dri"]
+  # Lets run.sh find and stop other AI tools before starting (8 GB VRAM).
+  labels: { "ai.tool": "yue2" }
+  environment: &common-env
+    HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-}
+    HF_HOME: /cache/hf
+    TORCH_HOME: /cache/torch
+    XDG_CACHE_HOME: /cache/xdg
+    MPLCONFIGDIR: /cache/mpl
+    NUMBA_CACHE_DIR: /cache/numba
+    PYTORCH_HIP_ALLOC_CONF: expandable_segments:True
+  shm_size: "8gb"
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "3" }
+
+services:
+  yue2:
+    <<: *common
+    build: { context: ., dockerfile: Dockerfile.rocm }
+    image: ai/yue2:rocm
+    container_name: ai-yue2
+    ports: ["${AI_BIND:-127.0.0.1}:7863:7863"]
+    volumes:
+      - ..:/app
+      - ${AI_CACHE:-${HOME}/.cache/ai-tools}:/cache
+    environment:
+      <<: *common-env
+      YUE_VRAM: auto

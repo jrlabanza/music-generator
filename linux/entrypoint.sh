@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Music Gen Studio (YuE 2). Port 7863, not webui.py's default 7860, which
-# would collide with Forge.
-#   --gpu-reserve-gib 2  headroom on the 3070's 8 GB (matches its own default)
+# would collide with Forge. Same entrypoint in the CUDA and the ROCm image.
+#   --gpu-reserve-gib 2  headroom on an 8 GB card (matches its own default)
+#   YUE_VRAM=auto|low|normal, YUE_FP8=1 (fp8 weights; the app switches it off
+#   where the card has no fp8 - ROCm before RDNA 4 - and says so in the log)
 #
 # Anything that is not a webui.py flag runs instead of the server, inside the
 # same environment - that is how linux/cli.sh gives you the README's Windows

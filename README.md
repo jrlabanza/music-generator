@@ -186,11 +186,13 @@ The setup scripts follow the AI Studio Hub's shared GPU contract (`tools/gpu_det
 |---|---|
 | **NVIDIA**, Windows and Linux | tested - CUDA PyTorch (`torch==2.10.0+cu128` as pinned), CUDA-graph decoder, `--quantization fp8` on compute capability 8.9+ |
 | **AMD**, Windows | implemented, **awaiting verification on AMD hardware** - AMD's native PyTorch-on-ROCm wheels (`torch 2.12.0+rocm7.14.1` from `repo.amd.com`, Python 3.11+, AMD Software Adrenalin 26.x). RX 7000 / RX 9000, PRO W7000, RX 6800 and up, and the Ryzen AI iGPUs (780M/880M/890M/8060S) map to their `gfx` target; other Radeons get the `device-all` build, and RX 6600 and older / RX 5000 / Vega are not in the wheels (CPU build, no generation). |
-| **AMD**, Linux | not yet: `linux/initialize.sh` says so and stops - the container is built on `nvidia/cuda` |
+| **AMD**, Linux | implemented, **awaiting verification on AMD hardware** - a second container image, `ai/yue2:rocm` (`linux/Dockerfile.rocm` on `rocm/dev-ubuntu-24.04:7.1.1`, run with `linux/compose.rocm.yml`): the same Python 3.12 environment with the official PyTorch ROCm wheel of the same version (`torch==2.10.0+rocm7.0`); the voice (Seed-VC) and SheetSage2 helper environments keep their exact `torch==2.8.0` pin as `+rocm6.4` wheels. Built, and the web UI booted, on the NVIDIA machine without a GPU device (the model load needs the card); nothing ROCm is installed on the host (the amdgpu driver is in the Ubuntu kernel). |
 
 On AMD the ROCm torch replaces YuE's `torch==2.10.0` pin (AMD ships one torch per ROCm release), so `initialize.py` installs YuE with `--no-deps` and the rest with torch constrained to the installed build; `pip check` reports that one deliberate mismatch. There is no fp8 and no CUDA-graph decoder on ROCm: `--quantization` is forced to `none` (except on RDNA 4, gfx12) and the eager decoder runs, which is slower per token but the same low-VRAM placement. flash-attn, triton and the vllm "fast" extra are never installed.
 
 To override the detection: `initialize.bat --gpu nvidia|amd|cpu` (also `--gfx gfx1100` for the AMD target); `--cuda cu126` still picks another CUDA build on NVIDIA.
+
+On Linux, `linux/initialize.sh` does the same detection (`--gpu nvidia|amd`, `--gfx gfx1100`): on AMD it installs Docker without the NVIDIA toolkit, checks `/dev/kfd` + `/dev/dri`, adds you to the `video` and `render` groups, builds `ai/yue2:rocm`, reads the gfx target with `rocminfo` inside the container and writes `.gpu.json` (`"backend": "rocm"`). `linux/run.sh`, `stop.sh`, `test.sh` and `cli.sh` pick the compose file and image from that file; `AI_GPU=rocm|cuda` forces one. Cards outside AMD's Linux matrix (RX 6700/6650/6600 = gfx1031/1032, the 780M/760M iGPU = gfx1103) get `HSA_OVERRIDE_GFX_VERSION` (`10.3.0` / `11.0.0`) written to `linux/.env`, which the ROCm container passes through. See `linux/README.md`.
 
 ## VRAM modes
 
