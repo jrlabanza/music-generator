@@ -578,7 +578,8 @@ class Engine:
     # public API -------------------------------------------------------------
     def submit(self, title, request, kind="song", options=None, owner=None):
         if kind in ("song", "plan", "transcribe"):
-            job_id = unique_id(title, {"song": OUTPUTS, "plan": PLANS, "transcribe": TRANSCRIPTIONS}[kind])
+            # takes queued together share the second and the (cut) title: skip ids already queued, not only on disk
+            job_id = unique_id(title, {"song": OUTPUTS, "plan": PLANS, "transcribe": TRANSCRIPTIONS}[kind], taken=self.jobs)
         else:                                   # decode / voice / stems / karaoke: derived from an existing song
             job_id = f"{kind}-{request['song_id']}-{int(time.time())}"
             while job_id in self.jobs:
@@ -624,10 +625,10 @@ def slugify(text, fallback="song"):
     return slug or fallback
 
 
-def unique_id(title, base_dir=OUTPUTS):
+def unique_id(title, base_dir=OUTPUTS, taken=()):
     base = f"{datetime.now():%Y%m%d-%H%M%S}-{slugify(title)}"
     candidate, n = base, 2
-    while (base_dir / candidate).exists():
+    while (base_dir / candidate).exists() or candidate in taken:
         candidate, n = f"{base}-{n}", n + 1
     return candidate
 
