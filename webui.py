@@ -1041,6 +1041,13 @@ def build_app(engine: Engine, password: str | None = None):
         return {"text": text, "model": LYRICS_MODEL, "device": "gpu" if gpu_free else "cpu", "seconds": round(time.time() - started, 1)}
 
     # ── voices (sing a song in your own voice) ─────────────────────────────
+    @app.get("/api/assistant/inventory")
+    def assistant_inventory():
+        """What the AI Studio Hub assistant may plan with: the song model's state and the voices a song can be sung in."""
+        return {"model": "YuE2", "state": engine.model_state, "ready": engine.model_state != "error",
+                "voices": [v if isinstance(v, str) else (v.get("name") or v.get("id")) for v in (voice_files() or [])][:40],
+                "takes_max": 4}
+
     @app.get("/api/voices")
     def voices():
         return {"voices": voice_files(), "ready": voice_ready()}
