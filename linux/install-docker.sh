@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs Docker Engine + NVIDIA Container Toolkit on Ubuntu 26.04 (resolute).
+# Installs Docker Engine + NVIDIA Container Toolkit on Ubuntu (26.04 resolute or another release) or Debian.
 # Run with: sudo bash linux/install-docker.sh
 #   --no-nvidia   AMD / ROCm box: Docker Engine only (no NVIDIA repository,
 #                 toolkit or runtime); the containers reach the card through
@@ -8,7 +8,16 @@ set -euo pipefail
 
 NVIDIA=1
 for a in "$@"; do case $a in --no-nvidia) NVIDIA=0 ;; *) echo "unknown option: $a" >&2; exit 1 ;; esac; done
-REAL_USER="${SUDO_USER:-jrlabanza}"
+REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
+# Docker's apt repository for this release: Ubuntu and its derivatives (UBUNTU_CODENAME) use the
+# Ubuntu one, Debian and its derivatives the Debian one.
+# shellcheck disable=SC1091
+. /etc/os-release
+DISTRO=ubuntu; CODENAME="${UBUNTU_CODENAME:-}"
+if [[ -z $CODENAME ]]; then
+  [[ ${ID:-} == debian || " ${ID_LIKE:-} " == *" debian "* ]] && DISTRO=debian
+  CODENAME="${VERSION_CODENAME:-resolute}"
+fi
 echo "==> Installing for user: $REAL_USER$( (( NVIDIA )) || echo ' (no NVIDIA toolkit)')"
 
 echo "==> [1/6] Prerequisites"
@@ -17,11 +26,11 @@ apt-get install -y -qq ca-certificates curl gnupg git
 
 echo "==> [2/6] Docker apt repository"
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+curl -fsSL https://download.docker.com/linux/$DISTRO/gpg \
   | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
 chmod a+r /etc/apt/keyrings/docker.gpg
 cat > /etc/apt/sources.list.d/docker.list <<LIST
-deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu resolute stable
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$DISTRO $CODENAME stable
 LIST
 
 if (( NVIDIA )); then
