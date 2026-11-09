@@ -30,6 +30,7 @@ tools/*
 !tools/gpu_detect.py
 voices/
 settings.json
+queue.json
 presets.json
 .share_secret
 # which GPU setup ran for (written by initialize.py / linux/initialize.sh)

@@ -524,8 +524,33 @@
     }
     const waiting = current ? queue : queue.slice(1);
     el.queue.hidden = !waiting.length;
-    el.queue.textContent = waiting.length ? `Up next: ${waiting.map(byLine).join(", ")}` : "";
+    const key = waiting.map((j) => j.id).join("|");
+    if (key === state.queueKey) return;          // rebuilt only when it changes, so a click is never lost to a redraw
+    state.queueKey = key;
+    el.queue.replaceChildren();
+    if (!waiting.length) return;
+    el.queue.append("Up next: ");
+    waiting.forEach((job, i) => {
+      const item = document.createElement("span");
+      item.className = "queue-job";
+      item.textContent = byLine(job);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "queue-x";
+      remove.dataset.job = job.id;
+      remove.title = "Remove from the queue";
+      remove.setAttribute("aria-label", `Remove ${job.title} from the queue`);
+      remove.textContent = "×";
+      item.append(remove);
+      el.queue.append(item, i < waiting.length - 1 ? ", " : "");
+    });
   }
+  el.queue.addEventListener("click", async (event) => {
+    const button = event.target.closest(".queue-x");
+    if (!button) return;
+    button.disabled = true;
+    try { await api(`/api/jobs/${button.dataset.job}/cancel`, { method: "POST" }); } catch (error) { alert(error.message); button.disabled = false; }
+  });
   el.cancel.addEventListener("click", async () => {
     const id = el.cancel.dataset.job;
     if (!id) return;

@@ -217,6 +217,10 @@ html[data-theme="dark"] .stepper li.active { background: var(--accent-soft); bor
 .stats { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .stats b { color: var(--text); font-weight: 600; }
 .queue { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); color: var(--muted); font-size: 12.5px; }
+.queue-job { white-space: nowrap; }
+.queue-x { margin-left: 4px; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; line-height: 16px; cursor: pointer; }
+.queue-x:hover { color: var(--text); border-color: var(--border-strong); }
+.queue-x:disabled { opacity: .5; cursor: default; }
 
 /* ── result ──────────────────────────────────────────────────────────── */
 .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }

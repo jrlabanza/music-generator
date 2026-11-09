@@ -37,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from run_lowvram import (BACKEND, HERE, MODELS, REPO, VRAM_MODES, effective_quantization, env_pin_memory,
-                         gpu_total_gib, make_pipeline, resolve_pin_memory, resolve_vram_mode)
+                         gpu_total_gib, make_pipeline, resolve_pin_memory, resolve_vram_mode, write_json_utf8)
 
 WEB = HERE / "webui"
 OUTPUTS = HERE / "outputs"
@@ -75,7 +75,7 @@ def voice_files():
         return []
     out = []
     for f in sorted(VOICES.iterdir()):
-        if f.is_file() and f.suffix.lower() in VOICE_SUFFIXES:
+        if f.is_file() and f.suffix.lower() in VOICE_SUFFIXES and not f.name.startswith("."):   # .x.upload = being checked
             try:
                 seconds = round(sf.info(str(f)).duration, 1)
             except Exception:
@@ -89,6 +89,7 @@ def voice_ready():
 
 
 SETTINGS_FILE = HERE / "settings.json"     # notification hooks (personal; never in git)
+QUEUE_FILE = HERE / "queue.json"           # queued and running jobs, so a restart does not lose them
 PRESETS_FILE = HERE / "presets.json"       # the user's own style presets
 PRESETS_DEFAULT = WEB / "presets.default.json"
 SHARE_SECRET_FILE = HERE / ".share_secret"
@@ -109,7 +110,7 @@ def read_settings():
 
 
 def write_settings(settings):
-    SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    write_json_utf8(SETTINGS_FILE, settings)
 
 
 # ── Stage-1 song models under models/ ─────────────────────────────────────────
@@ -211,7 +212,7 @@ def song_meta(directory):
 def write_meta(directory, **changes):
     data = read_json(directory / "meta.json") or {}
     data.update({k: v for k, v in changes.items() if v is not None})
-    (directory / "meta.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_utf8(directory / "meta.json", data)
     return data
 
 
@@ -326,8 +327,39 @@ class Engine:
         self.jobs: dict[str, Job] = {}
         self.current: Job | None = None
         self.lock = threading.Lock()
+        self.submit_lock = threading.Lock()     # ids and the saved queue: requests arrive on several threads
+        self._restore_queue()
         self.thread = threading.Thread(target=self._run, name="yue2-worker", daemon=True)
         self.thread.start()
+
+    # the saved queue ----------------------------------------------------------
+    def _save_queue(self):
+        with self.submit_lock:
+            pending = [{"id": j.id, "title": j.title, "request": j.request, "kind": j.kind, "options": j.options,
+                        "created": j.created, "owner": j.owner, "state": j.state}
+                       for j in self.jobs.values() if j.state in ("queued", "running") and not j.cancel_requested]
+            try:
+                write_json_utf8(QUEUE_FILE, pending)
+            except (OSError, TypeError, ValueError):
+                traceback.print_exc()
+
+    def _restore_queue(self):
+        """Queued jobs come back under their own ids (a caller polling one finds it again). The one that was running
+        is not re-run - it may be what brought the server down - but reported as failed so nobody waits for it."""
+        for item in read_json(QUEUE_FILE) or []:
+            try:
+                job = Job(id=item["id"], title=item["title"], request=item["request"], kind=item["kind"],
+                          options=item.get("options") or {}, owner=item.get("owner"), created=item.get("created") or time.time())
+            except (KeyError, TypeError):
+                continue
+            if item.get("state") == "running":
+                job.state, job.finished = "failed", time.time()
+                job.error = "interrupted when Music Studio restarted - queue it again"
+                self.jobs[job.id] = job
+            else:
+                self.jobs[job.id] = job
+                self.queue.put(job)
+        self._save_queue()
 
     # model loading ----------------------------------------------------------
     def _wanted_model(self):
@@ -402,16 +434,18 @@ class Engine:
                 self._ensure_model()
                 continue
             if job.cancel_requested:
-                job.state, job.finished = "cancelled", time.time()
+                job.state, job.finished = "cancelled", job.finished or time.time()
                 continue
             if not self._ensure_model():
                 job.state, job.error, job.finished = "failed", self.model_error, time.time()
+                self._save_queue()
                 continue
             self._run_job(job, work[job.kind])
 
     def _run_job(self, job, work):
         with self.lock:
             self.current, job.state, job.started = job, "running", time.time()
+        self._save_queue()
         try:
             job.result = work(job)
             job.state = "done"
@@ -429,6 +463,7 @@ class Engine:
             sweep_deleted()
             with self.lock:
                 self.current = None
+            self._save_queue()
             self._after(job)
 
     def _after(self, job):
@@ -577,17 +612,29 @@ class Engine:
 
     # public API -------------------------------------------------------------
     def submit(self, title, request, kind="song", options=None, owner=None):
-        if kind in ("song", "plan", "transcribe"):
-            # takes queued together share the second and the (cut) title: skip ids already queued, not only on disk
-            job_id = unique_id(title, {"song": OUTPUTS, "plan": PLANS, "transcribe": TRANSCRIPTIONS}[kind], taken=self.jobs)
-        else:                                   # decode / voice / stems / karaoke: derived from an existing song
-            job_id = f"{kind}-{request['song_id']}-{int(time.time())}"
-            while job_id in self.jobs:
-                job_id += "x"
-        job = Job(id=job_id, title=title, request=request, kind=kind, options=options or {}, owner=owner)
-        self.jobs[job.id] = job
+        with self.submit_lock:
+            self._forget_old_jobs()
+            if kind in ("song", "plan", "transcribe"):
+                # takes queued together share the second and the (cut) title: skip ids already queued, not only on disk
+                job_id = unique_id(title, {"song": OUTPUTS, "plan": PLANS, "transcribe": TRANSCRIPTIONS}[kind], taken=self.jobs)
+            else:                                   # decode / voice / stems / karaoke: derived from an existing song
+                job_id = f"{kind}-{request['song_id']}-{int(time.time())}"
+                while job_id in self.jobs:
+                    job_id += "x"
+            job = Job(id=job_id, title=title, request=request, kind=kind, options=options or {}, owner=owner)
+            self.jobs[job.id] = job
         self.queue.put(job)
+        self._save_queue()
         return job
+
+    def _forget_old_jobs(self, keep_hours=24, keep_max=300):
+        """Finished jobs stay pollable for a day; without this the table grows for as long as the server runs."""
+        cutoff = time.time() - keep_hours * 3600
+        done = sorted((j for j in self.jobs.values() if j.finished), key=lambda j: j.finished)
+        excess = len(done) - keep_max
+        for i, j in enumerate(done):
+            if j.finished < cutoff or i < excess:
+                self.jobs.pop(j.id, None)
 
     def cancel(self, job_id):
         job = self.jobs.get(job_id)
@@ -595,7 +642,15 @@ class Engine:
             raise KeyError(job_id)
         if job.state in {"queued", "running"}:
             job.cancel_requested = True
+            if job.state == "queued":           # it leaves the queue now, not when the worker reaches it
+                job.state, job.finished = "cancelled", time.time()
+            self._save_queue()
         return job
+
+    def busy_with(self, song_id):
+        """A queued or running job that works on this song (the song itself, or its voice / stems / karaoke)."""
+        return next((j for j in list(self.jobs.values()) if j.state in ("queued", "running")
+                     and (j.id == song_id or (j.request or {}).get("song_id") == song_id)), None)
 
     def status(self):
         gpu = None
@@ -1066,20 +1121,22 @@ def build_app(engine: Engine, password: str | None = None):
         voice = slugify(name.strip() or Path(file.filename).stem, "voice")
         VOICES.mkdir(parents=True, exist_ok=True)
         target = VOICES / f"{voice}{suffix}"
-        for old in VOICES.glob(f"{voice}.*"):          # replacing a voice keeps one file per name
-            old.unlink()
-        target.write_bytes(data)
+        staged = VOICES / f".{voice}.upload{suffix}"    # checked first: a bad clip must not cost the voice it replaces
+        staged.write_bytes(data)
         try:
-            seconds = sf.info(str(target)).duration
+            seconds = sf.info(str(staged)).duration
         except Exception as error:
-            target.unlink(missing_ok=True)
+            staged.unlink(missing_ok=True)
             raise HTTPException(422, f"Could not read that audio file: {error}")
         if seconds < 5:
-            target.unlink(missing_ok=True)
+            staged.unlink(missing_ok=True)
             raise HTTPException(422, "That clip is too short — record at least 20 s of singing or speaking.")
         if seconds > 180:
-            target.unlink(missing_ok=True)
+            staged.unlink(missing_ok=True)
             raise HTTPException(422, "Keep the clip under 3 minutes; 30-60 s of clean audio works best.")
+        for old in VOICES.glob(f"{voice}.*"):          # replacing a voice keeps one file per name
+            old.unlink()
+        os.replace(staged, target)
         return {"voice": {"name": voice, "file": target.name, "seconds": round(seconds, 1)}, "voices": voice_files()}
 
     @app.delete("/api/voices/{name}")
@@ -1235,7 +1292,7 @@ def build_app(engine: Engine, password: str | None = None):
             name, style = str(item.get("name", "")).strip()[:60], str(item.get("style", "")).strip()[:500]
             if name and style:
                 clean.append({"name": name, "style": style})
-        PRESETS_FILE.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_utf8(PRESETS_FILE, clean)
         return {"user": clean}
 
     def masked(value):
@@ -1362,9 +1419,10 @@ def build_app(engine: Engine, password: str | None = None):
         directory = OUTPUTS / song_id
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", song_id) or not directory.is_dir():
             raise HTTPException(404, "Unknown song")
-        job = engine.jobs.get(song_id)
-        if job is not None and job.state == "running":
-            raise HTTPException(409, "That song is still generating; cancel it instead.")
+        job = engine.busy_with(song_id)
+        if job is not None:
+            raise HTTPException(409, "That song is still generating; cancel it instead." if job.id == song_id else
+                                f"\"{job.title}\" is still working on that song; cancel it first.")
         target = move_to_trash(directory)
         if target is not None:
             return {"deleted": song_id, "moved_to": str(target), "deferred": False}

@@ -30,6 +30,9 @@ x-common: &common
     MPLCONFIGDIR: /cache/mpl
     NUMBA_CACHE_DIR: /cache/numba
     PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    # Pinned (page-locked) host memory; the AI Studio Hub sets it. Empty = the app's own
+    # default (on for CUDA, off for ROCm/CPU); the Settings toggle overrides either way.
+    AI_PIN_MEMORY: "${AI_PIN_MEMORY:-}"
   shm_size: "8gb"
   logging:
     driver: json-file
