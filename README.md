@@ -19,6 +19,15 @@ It is the **Music Studio** of [AI Studio Hub](https://github.com/jrlabanza/ai-st
 | `songs/` | Example requests: `sahod.json` (a Tagalog OPM song about late salaries), `sahod-prog-metal.json` (same lyrics as progressive metal), `sahod-prog-metal-duet.json` (the metal version re-sung as a male/female duet by supplying its chord-free score with `cot: melody` and singer names in the section tags), `sahod-orchestra-choir.json` (rewritten as a Coldplay-style orchestral anthem with choir), `dark-trap-instrumental-*.json` (instrumentals: lyrics made only of `[... - instrumental]` section tags plus "instrumental, no vocals" leading the style; the planned score comes out with an all-rest vocal voice; `dark-trap-instrumental-3min.json` reaches 2½ minutes by repeating the drop/breakdown blocks of a planned score and supplying it as `abc`) |
 | `YuE/` | Upstream repository, pinned as a git submodule |
 
+## What's new
+
+* **The queue survives a restart (2026-11-09).** Queued takes come back under their own ids after Music Studio restarts; the one that was running is reported as failed ("interrupted when Music Studio restarted") instead of vanishing, so the AI Studio Hub stops waiting for it.
+* **Cancelling a queued take removes it at once**, and every waiting take has its own remove button. Deleting a song checks every job working on it (voice, stems, karaoke), not only the song's own id.
+* **Safe saves.** Settings, song notes and presets are written atomically, so a half-written `settings.json` can no longer lose the hooks or the model choice; replacing a voice checks the new clip before the old one is deleted.
+* **Takes queued together** no longer share a job id (the second used to overwrite the first). Example request added: *The Whisking Hour*.
+* **Assistant skills** owned by Music Studio, listed at `/api/assistant/inventory` for the AI Studio Hub's assistant.
+* **Linux:** `install-docker.sh` reads the distribution, release and user from the machine; the compose file passes `AI_PIN_MEMORY` through like the other studios.
+
 ## Setup (Windows)
 
 Requirements: an NVIDIA GPU with BF16 support and at least 8 GB VRAM (compute capability ≥ 8.0; FP8 mode needs ≥ 8.9) or an AMD Radeon from the list under [GPU support](#gpu-support), a recent driver, Python 3.10+ (`py -3.11` below; 3.11+ on AMD), git, ~15 GB of disk, and enough RAM to hold the model between songs (16 GB works, 32 GB+ is comfortable in low-VRAM mode, which keeps most of the model in RAM).
