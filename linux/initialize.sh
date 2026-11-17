@@ -131,8 +131,9 @@ else bad "could not write .gpu.json (the app falls back to runtime detection)"; 
 say 4/6 "Prerequisites ($MODELS)"
 if [[ $MODELS == none ]]; then ok "skipped (--no-models)"; else
   # YuE2-3B + YuE2-Vae into models/ (download_models.py resumes and verifies).
-  # --all-models adds the SheetSage2 cover-feature encoder (2.6 GB).
-  extra=(); [[ $MODELS == all ]] && extra=(--sheetsage2 --legacy-vae)
+  # plus the cover feature's SheetSage2 + MERT encoder and the legacy VAE (2.7 GB) - the image already has its
+  # environment, so without these weights the Cover button would fail.
+  extra=(--sheetsage2 --legacy-vae)
   # Every weights file is checked against its weights_manifest.json sha256, like
   # initialize.py does on Windows - and a mismatch (a bad copy, an interrupted
   # download) is repaired here rather than reported: the file is removed and
@@ -172,7 +173,9 @@ say 4b/6 "Voice conversion engine (Seed-VC)"
 if [[ -f $ROOT/tools/seed-vc/inference.py ]]; then ok "tools/seed-vc present"
 else
   mkdir -p "$ROOT/tools"
-  git clone --depth 1 https://github.com/Plachtaa/seed-vc "$ROOT/tools/seed-vc" 2>&1 | tail -1 | sed 's/^/      /' \
+  # pinned to the commit the Windows setup uses (initialize.py SEEDVC_COMMIT), so both run the same Seed-VC
+  { git init -q "$ROOT/tools/seed-vc" && git -C "$ROOT/tools/seed-vc" fetch -q --depth 1 https://github.com/Plachtaa/seed-vc 51383efd921027683c89e5348211d93ff12ac2a8 \
+    && git -C "$ROOT/tools/seed-vc" checkout -q FETCH_HEAD; } 2>&1 | tail -1 | sed 's/^/      /' \
     && ok "cloned into tools/seed-vc (checkpoints download on the first conversion)" \
     || bad "could not clone seed-vc (no network?) - Voices… stays disabled until you re-run this"
 fi

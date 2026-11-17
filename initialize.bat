@@ -3,3 +3,4 @@
 :: (finds Python 3.10-3.13, YuE submodule, .venv, CUDA PyTorch, packages, model weights).
 :: On Linux use linux\initialize.sh instead.
 call "%~dp0Setup Music Gen Studio.bat" %*
+exit /b %ERRORLEVEL%

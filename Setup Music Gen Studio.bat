@@ -9,14 +9,16 @@ echo.
 set "PY="
 for %%V in (3.12 3.11 3.13 3.10) do if not defined PY py -%%V -c "pass" >nul 2>&1 && set "PY=py -%%V"
 if not defined PY python -c "import sys; sys.exit(not (3, 10) <= sys.version_info[:2] <= (3, 13))" >nul 2>&1 && set "PY=python"
+set RC=0
 if not defined PY goto nopython
 %PY% initialize.py %*
-if errorlevel 1 goto failed
+if errorlevel 1 ( set RC=1 & goto failed )
 echo.
 echo All set. Double-click "Start Music Gen Studio.cmd" to open the app.
 goto end
 
 :nopython
+set RC=1
 echo Python 3.10 to 3.13 was not found. Install Python 3.12 from https://www.python.org/downloads/windows/
 echo and run this again.
 goto end
@@ -27,3 +29,5 @@ echo Setup stopped - see the message above. Fix that and run this again; finishe
 
 :end
 pause
+:: the exit code tells a caller (the AI Studio Hub installer) whether setup finished
+exit /b %RC%

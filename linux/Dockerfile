@@ -123,26 +123,28 @@ RUN assert-imports.sh torch transformers accelerate safetensors soundfile tiktok
 # the README says; the pip cache mount means the 2.5 GB torch wheel is fetched
 # once for both. webui.py finds them through MUSICGEN_VOICE_PY /
 # MUSICGEN_SHEETSAGE_PY, set by entrypoint.sh.
+# torch 2.8.0 from CUDA 12.8 (not 12.6): 12.8 is the first with RTX 50 / Blackwell (sm_120) kernels and still runs on
+# every card the image supports; the CUDA 13 base image needs driver 580+, which carries it.
 ENV VOICE_ENV=/opt/venv-voice \
     SHEETSAGE_ENV=/opt/venv-sheetsage2
-RUN --mount=type=cache,target=/root/.cache/pip,id=ai-pip-cu126 \
+RUN --mount=type=cache,target=/root/.cache/pip,id=ai-pip-cu128 \
     set -eux; \
     export PIP_NO_CACHE_DIR=false; \
     python3.11 -m venv "$VOICE_ENV"; \
     "$VOICE_ENV/bin/pip" install --upgrade pip wheel setuptools; \
-    "$VOICE_ENV/bin/pip" install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126; \
+    "$VOICE_ENV/bin/pip" install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128; \
     "$VOICE_ENV/bin/pip" install \
       scipy==1.13.1 librosa==0.10.2 "huggingface-hub>=0.28.1" munch==4.0.0 einops==0.8.0 \
       descript-audio-codec==1.0.0 pydub==0.25.1 transformers==4.46.3 soundfile numpy==1.26.4 \
       hydra-core==1.3.2 pyyaml python-dotenv demucs mutagen lameenc pyloudnorm; \
     "$VOICE_ENV/bin/python" -c "import torch, torchaudio, demucs, lameenc, pyloudnorm, mutagen, transformers, scipy, librosa; assert torch.__version__.startswith('2.8.0'), torch.__version__"
 
-RUN --mount=type=cache,target=/root/.cache/pip,id=ai-pip-cu126 \
+RUN --mount=type=cache,target=/root/.cache/pip,id=ai-pip-cu128 \
     set -eux; \
     export PIP_NO_CACHE_DIR=false; \
     python3.11 -m venv "$SHEETSAGE_ENV"; \
     "$SHEETSAGE_ENV/bin/pip" install --upgrade pip wheel; \
-    "$SHEETSAGE_ENV/bin/pip" install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126; \
+    "$SHEETSAGE_ENV/bin/pip" install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128; \
     "$SHEETSAGE_ENV/bin/pip" install \
       huggingface-hub==0.36.0 transformers==4.45.2 safetensors==0.5.3 numpy==1.24.3 scipy==1.13.1 \
       mir_eval==0.8.2 pretty_midi==0.2.10 mido==1.3.3 setuptools==78.1.1 soundfile; \

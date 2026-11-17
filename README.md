@@ -71,7 +71,7 @@ The page opens at http://127.0.0.1:7860 once the server is up (~10 s; the model 
 
 **Linux:** `./linux/run.sh` (console in this window; Ctrl+C or close it to stop), `./linux/run.sh --background`, or the **AI – YuE 2** app-menu entry the initializer added. The page is at **http://127.0.0.1:7863** on Linux — 7860 is left to the image generator so both can be installed side by side.
 
-On Linux the voice tools (Export to MP3, stems, karaoke sync, *Voices…*) and the cover feature need no extra setup: the two helper environments described below for Windows are part of the container image, and `linux/initialize.sh` fetches the Seed-VC code (`--all-models` adds the SheetSage2 transcriber and the legacy VAE).
+On Linux the voice tools (Export to MP3, stems, karaoke sync, *Voices…*) and the cover feature need no extra setup: the two helper environments described below for Windows are part of the container image, and `linux/initialize.sh` fetches the Seed-VC code (at a pinned commit) and the SheetSage2 transcriber and legacy VAE (`--no-models` skips the downloads).
 
 - **Compose** — style prompt (genre, instruments, vocal, language, tempo), lyrics with `[Verse]`/`[Chorus]` tags, plan mode, seed. *Load example* fills in the upstream song. `Ctrl+Enter` generates.
 - **Progress** — each stage live (plan score → semantic tokens → synthesize → decode) with tokens/s and an audio-length estimate, a *Cancel* button, and a queue for further requests.
@@ -136,11 +136,11 @@ Whatever the route: the PC stays on with the app running, generation still queue
 
 ### Cover a recording (SheetSage2)
 
-The cover feature runs upstream's SheetSage2 transcriber in its own environment (it pins a different torch). One-time setup, about 2.7 GB of extra downloads:
+The cover feature runs upstream's SheetSage2 transcriber in its own environment (it pins a different torch). `initialize.bat` sets it up and downloads the models (about 2.7 GB) - `--no-helpers` leaves both helper environments out, `--no-models` the downloads. By hand, the same steps:
 
 ```powershell
 py -3.11 -m venv .venv-sheetsage2
-.venv-sheetsage2\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+.venv-sheetsage2\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 .venv-sheetsage2\Scripts\python.exe -m pip install huggingface-hub==0.36.0 transformers==4.45.2 safetensors==0.5.3 numpy==1.24.3 scipy==1.13.1 mir_eval==0.8.2 pretty_midi==0.2.10 mido==1.3.3 setuptools==78.1.1 soundfile
 YuE\.venv\Scripts\python.exe download_models.py --sheetsage2 --legacy-vae
 ```
@@ -149,13 +149,14 @@ YuE\.venv\Scripts\python.exe download_models.py --sheetsage2 --legacy-vae
 
 ### Sing it in your voice (Seed-VC)
 
-Voice conversion runs in its own environment too (Seed-VC pins older `transformers`/`numpy`). One-time setup; the Seed-VC checkpoints (~1.5 GB: the singing model, RMVPE pitch tracker, CAMPPlus speaker encoder, BigVGAN vocoder, Whisper) and Demucs download from Hugging Face on the first conversion:
+Voice conversion runs in its own environment too (Seed-VC pins older `transformers`/`numpy`). `initialize.bat` sets it up as well (Seed-VC at the commit it was tested with) and ends with a GPU check in each helper environment. The Seed-VC checkpoints (~1.5 GB: the singing model, RMVPE pitch tracker, CAMPPlus speaker encoder, BigVGAN vocoder, Whisper) and Demucs download from Hugging Face on the first conversion. By hand:
 
 ```powershell
 py -3.11 -m venv .venv-voice
-.venv-voice\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+.venv-voice\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 .venv-voice\Scripts\python.exe -m pip install scipy==1.13.1 librosa==0.10.2 "huggingface-hub>=0.28.1" munch==4.0.0 einops==0.8.0 descript-audio-codec==1.0.0 pydub==0.25.1 transformers==4.46.3 soundfile numpy==1.26.4 hydra-core==1.3.2 pyyaml python-dotenv demucs mutagen lameenc pyloudnorm
 git clone https://github.com/Plachtaa/seed-vc tools\seed-vc
+git -C tools\seed-vc checkout 51383efd921027683c89e5348211d93ff12ac2a8
 ```
 
 Then in the app open *Voices…* on any song and add a recording of yourself: 30–60 s, singing (speaking works, singing works better), alone, in a quiet room, no backing track, no reverb — the model copies whatever it hears. Clips live in `voices/` (gitignored; they never leave the PC). `voice_convert.py` does the work: Demucs `htdemucs` separates the song (stems are cached in the song's `stems/` folder, so trying a second voice skips that step), Seed-VC's f0-conditioned model (`DiT … f0_44k … v2`, 30 diffusion steps) converts the vocal at 44.1 kHz, then it is level-matched to the original vocal, mixed over the accompaniment and written next to `audio.flac`. Roughly real time on an RTX 4060 (a one-minute song takes one to two minutes; the first run also downloads the checkpoints); the GPU is shared with generation, so conversions queue behind songs. Harmonies and duets add one conversion pass each (the renders are cached in `stems/`, so re-mixing with another harmony or duet voice reuses them).

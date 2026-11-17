@@ -122,7 +122,9 @@ def detect_nvidia():
         major = int(driver.split(".")[0])
     except ValueError:
         major = 0
-    tag = "cu130" if major >= 580 else "cu126"
+    # CUDA 13.0 wheels need driver 580+, CUDA 12.8 wheels 570+ (the first with RTX 50 / sm_120 kernels); CUDA 12.6 has
+    # no sm_120 and is only for older drivers
+    tag = "cu130" if major >= 580 else ("cu128" if major >= 570 else "cu126")
     try:
         vram_mb = int(float(vram))
     except ValueError:

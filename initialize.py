@@ -296,6 +296,107 @@ def step_gpu_json(gpu):
           + (f", {record['gfx']}" if record["gfx"] else ""))
 
 
+# ── helper environments (README: "Cover a recording", "Sing it in your voice") ──
+# Seed-VC and SheetSage2 pin libraries the main environment cannot share (older transformers / numpy), so each runs
+# in its own Python 3.11 environment. torch 2.8.0 comes from CUDA 12.8 on drivers 570+ (RTX 50 / Blackwell needs it -
+# the README's cu126 has no sm_120 kernels), CUDA 12.6 on older drivers, and the CPU build on AMD (torch 2.8.0 has no
+# Windows ROCm wheels) or without a card. A failure here leaves only that feature off; the songs still work.
+HELPER_TORCH = "2.8.0"
+SEEDVC_URL, SEEDVC_COMMIT = "https://github.com/Plachtaa/seed-vc", "51383efd921027683c89e5348211d93ff12ac2a8"
+HELPERS = {
+    ".venv-voice": {
+        "what": "voice conversion, stems, export and lyrics sync",
+        "packages": ["scipy==1.13.1", "librosa==0.10.2", "huggingface-hub>=0.28.1", "munch==4.0.0", "einops==0.8.0",
+                     "descript-audio-codec==1.0.0", "pydub==0.25.1", "transformers==4.46.3", "soundfile", "numpy==1.26.4",
+                     "hydra-core==1.3.2", "pyyaml", "python-dotenv", "demucs", "mutagen", "lameenc", "pyloudnorm"],
+        "imports": "import torch, torchaudio, librosa, demucs, transformers",
+    },
+    ".venv-sheetsage2": {
+        "what": "covers (SheetSage2 transcription)",
+        "packages": ["huggingface-hub==0.36.0", "transformers==4.45.2", "safetensors==0.5.3", "numpy==1.24.3",
+                     "scipy==1.13.1", "mir_eval==0.8.2", "pretty_midi==0.2.10", "mido==1.3.3", "setuptools==78.1.1",
+                     "soundfile"],
+        "imports": "import torch, torchaudio, transformers, mir_eval, pretty_midi",
+    },
+}
+HELPER_PROBLEMS: list[str] = []
+
+
+def helper_index(gpu):
+    if gpu["backend"] != "cuda":
+        return "https://download.pytorch.org/whl/cpu"
+    try:
+        major = int(str(gpu.get("driver") or "0").split(".")[0])
+    except ValueError:
+        major = 0
+    return "https://download.pytorch.org/whl/" + ("cu128" if major >= 570 else "cu126")
+
+
+def py311():
+    """Python 3.11 through the py launcher (the helper pins have no wheels for newer Pythons), or None."""
+    try:
+        out = subprocess.run(["py", "-3.11", "-c", "import sys; print(sys.executable)"], capture_output=True, text=True)
+        return out.stdout.strip() if out.returncode == 0 else None
+    except OSError:
+        return None
+
+
+def helper_ok(py, imports, gpu):
+    code = imports + ("\nx = torch.ones(8, device='cuda'); assert float((x * 2).sum()) == 16" if gpu["backend"] == "cuda" else "")
+    return subprocess.call([str(py), "-c", code], cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
+
+def step_helpers(gpu):
+    base = py311()
+    if not base:
+        HELPER_PROBLEMS.append("Python 3.11 not found (py -3.11) - the helper environments were not built")
+        print("  Python 3.11 is not installed (py -3.11): voice conversion, stems, export, lyrics sync and covers stay off.\n"
+              "  Install it (winget install Python.Python.3.11) and run this again.")
+        return
+    for name, spec in HELPERS.items():
+        venv = HERE / name
+        py = venv / "Scripts" / "python.exe"
+        print(f"  {name}: {spec['what']}", flush=True)
+        if py.exists() and helper_ok(py, spec["imports"], gpu):
+            print("    already set up")
+            continue
+        try:
+            if venv.exists() and not helper_ok(py, "import torch", {"backend": "cpu"}):
+                shutil.rmtree(venv, ignore_errors=True)
+            if not py.exists():
+                run(base, "-m", "venv", venv)
+            run(py, "-m", "pip", "install", "--upgrade", "pip", "--quiet")
+            run(py, "-m", "pip", "install", f"torch=={HELPER_TORCH}", f"torchaudio=={HELPER_TORCH}", "--index-url", helper_index(gpu))
+            run(py, "-m", "pip", "install", *spec["packages"])
+            if not helper_ok(py, spec["imports"], gpu):
+                raise SetupError("its packages installed, but they do not import / run on this card")
+            print("    ready")
+        except SetupError as exc:
+            HELPER_PROBLEMS.append(f"{name} ({spec['what']}): {exc}")
+            print(f"    not set up: {exc} - this feature stays off; run setup again to retry")
+    seedvc = HERE / "tools" / "seed-vc"
+    if (seedvc / "inference.py").exists():
+        print(f"  tools\\seed-vc: present")
+    else:
+        try:
+            run("git", "clone", SEEDVC_URL, seedvc)
+            run("git", "-C", seedvc, "checkout", "--quiet", SEEDVC_COMMIT)
+        except (SetupError, OSError) as exc:
+            HELPER_PROBLEMS.append(f"tools\\seed-vc: {exc}")
+            print(f"  could not fetch Seed-VC ({exc}) - voice conversion stays off; run setup again to retry")
+
+
+def step_helper_models():
+    if not (HERE / ".venv-sheetsage2" / "Scripts" / "python.exe").exists():
+        print("  skipped - the SheetSage2 environment is not set up")
+        return
+    try:
+        run(VENV_PY, HERE / "download_models.py", "--sheetsage2", "--legacy-vae")   # resumable; skips complete files
+    except SetupError as exc:
+        HELPER_PROBLEMS.append(f"cover models: {exc}")
+        print(f"  the cover models did not download ({exc}) - covers stay off; run setup again to resume")
+
+
 # ── fast PyTorch download ─────────────────────────────────────────────────────
 
 def urlopen(url, **headers):
@@ -405,6 +506,9 @@ def main():
     parser.add_argument("--gpu", choices=gpu_detect.VENDORS, default="",
                         help="override the detected vendor: nvidia, amd or cpu (default: detect)")
     parser.add_argument("--gfx", default="", help="AMD only: override the target, e.g. gfx1100 (default: from the name)")
+    parser.add_argument("--no-helpers", action="store_true",
+                        help="skip the voice conversion / stems / export / lyrics sync and cover environments")
+    parser.add_argument("--no-models", action="store_true", help="environments only: no model downloads")
     args = parser.parse_args()
     if sys.version_info < PYTHONS[0]:
         print(f"Run this with Python 3.10-3.13 (this is {sys.version.split()[0]}), e.g. py -3.12 initialize.py")
@@ -423,9 +527,13 @@ def main():
              ("Python environment (YuE\\.venv)", lambda: step_venv(gpu["backend"])),
              (torch_title, lambda: step_torch(gpu, args.cuda)),
              ("yue2 and the web app's packages", lambda: step_packages(gpu)),
-             ("Model weights (about 7.3 GB)", step_models),
+             ("Model weights (about 7.3 GB)", (lambda: print("  skipped - --no-models")) if args.no_models else step_models),
              ("Check", lambda: step_check(gpu)),
              ("GPU record (.gpu.json)", lambda: step_gpu_json(gpu))]
+    if not args.no_helpers:
+        steps += [("Helper environments: voice conversion, stems, export, lyrics sync, covers", lambda: step_helpers(gpu)),
+                  ("Cover models: SheetSage2, MERT, legacy VAE (about 2.7 GB)",
+                   (lambda: print("  skipped - --no-models")) if args.no_models else step_helper_models)]
     started = time.time()
     try:
         for number, (title, action) in enumerate(steps, 1):
@@ -438,6 +546,10 @@ def main():
         print("\nInterrupted. Run setup again to continue where it stopped.", flush=True)
         return 130
     print(f"\nSetup complete ({(time.time() - started) / 60:.0f} min).", flush=True)
+    if HELPER_PROBLEMS:
+        print("Not set up (optional features - run setup again to retry):")
+        for problem in HELPER_PROBLEMS:
+            print("  - " + problem)
     return 0
 
 
